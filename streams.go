@@ -30,7 +30,7 @@
 //
 //	for {
 //	    value, err := filter.Pull(Blocking)
-//	    if err == EndOfData {
+//	    if errors.Is(err, ErrEndOfData) {
 //	        break
 //	    }
 //	    fmt.Println(value) // Output: 4, 16
@@ -49,18 +49,31 @@
 //	fmt.Println(result) // Output: 15
 package streams
 
-import "errors"
+import (
+	"errors"
+)
 
 // BlockingType is used to indicate whether a Pull call should block or not.
 type BlockingType bool
 
 const (
-	// NonBlocking BlockingType = false
+	// NonBlocking BlockingType = false.
 	Blocking BlockingType = true
 )
 
-// EndOfData is returned by Pull when the stream has no more data to produce.
-var EndOfData = errors.New("end of data")
+// ErrEndOfData is returned by Pull when the stream has no more data to produce.
+var ErrEndOfData = errors.New("end of data")
+
+// // DataPullError is returned by Pull when the stream is not ErrEndOfData and
+// // Pull()ing data results in an error.
+// type DataPullError struct {
+//     err error
+// }
+
+// // Error returns a helpful error message.
+// func (e *DataPullError) Error() string {
+// 	return fmt.Sprintf("Data pull failed: %v", e.err)
+// }
 
 // Source represents a source of data that can pull elements one at a time.
 type Source[T any] interface {
@@ -77,13 +90,15 @@ func NewSliceSource[T any](data []T) *SliceSource[T] {
 	return &SliceSource[T]{data: data}
 }
 
-// Produce emits the next element from the slice or returns EndOfData if all elements are produced.
-func (sp *SliceSource[T]) Pull(block BlockingType) (*T, error) {
+// Pull emits the next element from the slice or returns ErrEndOfData if all elements are produced.
+func (sp *SliceSource[T]) Pull(_ BlockingType) (*T, error) {
 	if len(sp.data) < 1 {
-		return nil, EndOfData
+		return nil, ErrEndOfData
 	}
+
 	value := sp.data[0]
 	sp.data = sp.data[1:]
+
 	return &value, nil
 }
 
@@ -101,15 +116,18 @@ func NewMapper[TIn, TOut any](input Source[TIn], mapFn func(TIn) TOut) *Mapper[T
 // Pull transforms the next input element using the mapping function.
 func (mt *Mapper[TIn, TOut]) Pull(block BlockingType) (*TOut, error) {
 	nextIn, err := mt.input.Pull(block)
-	if err != nil {
-		return nil, err
+	if errors.Is(err, ErrEndOfData) {
+		return nil, ErrEndOfData
 	}
+	// if err != nil {
+	// 	return nil, &DataPullError{err:err}
+	// }
 	// if nextIn == nil {
 	// 	return nil, nil
 	// }
 	nextOut := mt.mapFn(*nextIn)
+
 	return &nextOut, nil
-	// return nextIn, nil
 }
 
 // Filter filters elements in a stream based on a predicate.
@@ -127,9 +145,12 @@ func NewFilter[T any](input Source[T], predicate func(T) bool) *Filter[T] {
 func (ft *Filter[T]) Pull(block BlockingType) (*T, error) {
 	for {
 		next, err := ft.input.Pull(block)
-		if err != nil {
-			return nil, err
+		if errors.Is(err, ErrEndOfData) {
+			return nil, ErrEndOfData
 		}
+		// if err != nil {
+		// 	return nil, &DataPullError{err:err}
+		// }
 		// 	if next == nil {
 		// 		return nil, nil
 		// 	}
@@ -162,11 +183,12 @@ func NewReduceTransformer[TIn, TOut any](
 	}
 }
 
-// Pull generates the next finalized element from the reduction or returns EndOfData when complete.
+// Pull generates the next finalized element from the reduction or returns ErrEndOfData when complete.
 func (rt *ReduceTransformer[TIn, TOut]) Pull(block BlockingType) (*TOut, error) {
 	if len(rt.buffer) > 0 {
 		out := rt.buffer[0]
 		rt.buffer = rt.buffer[1:]
+
 		return &out, nil
 	}
 
@@ -175,10 +197,11 @@ func (rt *ReduceTransformer[TIn, TOut]) Pull(block BlockingType) (*TOut, error) 
 	}
 
 	next, err := rt.input.Pull(block)
-	if err == EndOfData {
+	if errors.Is(err, ErrEndOfData) {
 		rt.eod = err
 		rt.buffer = rt.accumulator
 		rt.accumulator = nil
+
 		return rt.Pull(block)
 	}
 	// if err != nil {
@@ -188,6 +211,7 @@ func (rt *ReduceTransformer[TIn, TOut]) Pull(block BlockingType) (*TOut, error) 
 	// 	return nil, nil
 	// }
 	rt.buffer, rt.accumulator = rt.reducer(rt.accumulator, *next)
+
 	return rt.Pull(block)
 }
 
@@ -211,16 +235,16 @@ func NewReducer[TIn, TOut any](
 // Reduce processes all elements from the input producer and returns the final reduced value.
 func (rc *Reducer[TIn, TOut]) Reduce(input Source[TIn]) (TOut, error) {
 	acc := rc.initialAcc
+
 	for {
 		next, err := input.Pull(Blocking)
-		if err == EndOfData {
+		if errors.Is(err, ErrEndOfData) {
 			return acc, nil
 		}
 		// 	if err != nil {
 		// 		return * new(TOut), err
 		// 	}
 		// 	if next != nil { // In blocking mode, this should always be true.
-		acc = rc.reducer(acc, *next)
-		// 	}
+		acc = rc.reducer(acc, *next) // 	}
 	}
 }

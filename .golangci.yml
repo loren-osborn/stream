@@ -1,0 +1,25 @@
+---
+linters:
+  enable-all: true
+  disable:
+    # obsolete:
+    - execinquery
+    - exportloopref
+    - gomnd
+    # false positives
+    - ireturn
+issues:
+  fix: true
+# linters-settings:
+#   testpackage:
+#     # Limited test access to private data.
+#     skip-regexp: private_test\.go
+#   gocognit:
+#     # Default: 30
+#     min-complexity: 38
+#   nestif:
+#     # Default: 5
+#     min-complexity: 10
+#   cyclop:
+#     # Default: 10
+#     max-complexity: 13
