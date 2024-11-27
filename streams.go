@@ -57,12 +57,15 @@ import (
 type BlockingType bool
 
 const (
-	// NonBlocking BlockingType = false.
-	Blocking BlockingType = true
+	NonBlocking BlockingType = false
+	Blocking    BlockingType = true
 )
 
 // ErrEndOfData is returned by Pull when the stream has no more data to produce.
 var ErrEndOfData = errors.New("end of data")
+
+// ErrNoDataYet is returned by Pull(NonBlocking) when the stream has no more data yet.
+var ErrNoDataYet = errors.New("data not ready")
 
 // // DataPullError is returned by Pull when the stream is not ErrEndOfData and
 // // Pull()ing data results in an error.
@@ -155,8 +158,8 @@ func (mt *Mapper[TIn, TOut]) Pull(block BlockingType) (*TOut, error) {
 	// if err != nil {
 	// 	return nil, &DataPullError{err:err}
 	// }
-	// if nextIn == nil {
-	// 	return nil, nil
+	// if errors.Is(err, ErrNoDataYet) {
+	// 	return nil, ErrNoDataYet
 	// }
 	nextOut := mt.mapFn(*nextIn)
 
@@ -184,9 +187,9 @@ func (ft *Filter[T]) Pull(block BlockingType) (*T, error) {
 		// if err != nil {
 		// 	return nil, &DataPullError{err:err}
 		// }
-		// 	if next == nil {
-		// 		return nil, nil
-		// 	}
+		// if errors.Is(err, ErrNoDataYet) {
+		// 	return nil, ErrNoDataYet
+		// }
 		if ft.predicate(*next) {
 			return next, nil
 		}
@@ -240,8 +243,8 @@ func (rt *ReduceTransformer[TIn, TOut]) Pull(block BlockingType) (*TOut, error) 
 	// if err != nil {
 	// 	return nil, err
 	// }
-	// if next == nil {
-	// 	return nil, nil
+	// if errors.Is(err, ErrNoDataYet) {
+	// 	return nil, ErrNoDataYet
 	// }
 	rt.buffer, rt.accumulator = rt.reducer(rt.accumulator, *next)
 
