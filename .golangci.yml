@@ -3,9 +3,7 @@ linters:
   enable-all: true
   disable:
     # obsolete:
-    - execinquery
     - exportloopref
-    - gomnd
     # false positives
     - ireturn
 issues:

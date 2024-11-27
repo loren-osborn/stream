@@ -80,6 +80,14 @@ type Source[T any] interface {
 	Pull(block BlockingType) (*T, error)
 }
 
+// SourceFunc lets a lambda become a source.
+type SourceFunc[T any] func(BlockingType) (*T, error)
+
+// Pull proxies the call to the source lambda.
+func (sf SourceFunc[T]) Pull(blocks BlockingType) (*T, error) {
+	return sf(blocks)
+}
+
 // SliceSource is a producer backed by a slice of elements.
 type SliceSource[T any] struct {
 	data []T
@@ -100,6 +108,31 @@ func (sp *SliceSource[T]) Pull(_ BlockingType) (*T, error) {
 	sp.data = sp.data[1:]
 
 	return &value, nil
+}
+
+// SliceSink is simple way to capture the result of a source into a slice.
+type SliceSink[T any] struct {
+	dest *[]T
+}
+
+// NewSliceSink creates a new SliceSink from a slice pointer.
+func NewSliceSink[T any](dest *[]T) *SliceSink[T] {
+	return &SliceSink[T]{dest: dest}
+}
+
+// Reduce processes all elements from the input producer and returns the final reduced value.
+func (ss *SliceSink[T]) Append(input Source[T]) (*[]T, error) {
+	for {
+		next, err := input.Pull(Blocking)
+		if errors.Is(err, ErrEndOfData) {
+			return ss.dest, nil
+		}
+		// if err != nil {
+		// 	return &DataPullError{err:err}
+		// }
+		// if next != nil { // This should always be true in Blocking mode.
+		*ss.dest = append(*ss.dest, *next) // }
+	}
 }
 
 // Mapper applies a mapping function to a stream, transforming TIn elements into TOut.
@@ -241,9 +274,9 @@ func (rc *Reducer[TIn, TOut]) Reduce(input Source[TIn]) (TOut, error) {
 		if errors.Is(err, ErrEndOfData) {
 			return acc, nil
 		}
-		// 	if err != nil {
-		// 		return * new(TOut), err
-		// 	}
+		// if err != nil {
+		// 	return * new(TOut), &DataPullError{err:err}
+		// }
 		// 	if next != nil { // In blocking mode, this should always be true.
 		acc = rc.reducer(acc, *next) // 	}
 	}
