@@ -51,6 +51,7 @@ package streams
 
 import (
 	"errors"
+	"fmt"
 )
 
 // BlockingType is used to indicate whether a Pull call should block or not.
@@ -67,16 +68,16 @@ var ErrEndOfData = errors.New("end of data")
 // ErrNoDataYet is returned by Pull(NonBlocking) when the stream has no more data yet.
 var ErrNoDataYet = errors.New("data not ready")
 
-// // DataPullError is returned by Pull when the stream is not ErrEndOfData and
-// // Pull()ing data results in an error.
-// type DataPullError struct {
-//     err error
-// }
+// DataPullError is returned by Pull when the stream is not ErrEndOfData and
+// Pull()ing data results in an error.
+type DataPullError struct {
+	Err error
+}
 
-// // Error returns a helpful error message.
-// func (e *DataPullError) Error() string {
-// 	return fmt.Sprintf("Data pull failed: %v", e.err)
-// }
+// Error returns a helpful error message.
+func (e *DataPullError) Error() string {
+	return fmt.Sprintf("Data pull failed: %v", e.Err)
+}
 
 // Source represents a source of data that can pull elements one at a time.
 type Source[T any] interface {
@@ -130,9 +131,10 @@ func (ss *SliceSink[T]) Append(input Source[T]) (*[]T, error) {
 		if errors.Is(err, ErrEndOfData) {
 			return ss.dest, nil
 		}
-		// if err != nil {
-		// 	return &DataPullError{err:err}
-		// }
+
+		if err != nil {
+			return nil, &DataPullError{Err: err}
+		}
 		// if next != nil { // This should always be true in Blocking mode.
 		*ss.dest = append(*ss.dest, *next) // }
 	}
@@ -155,12 +157,13 @@ func (mt *Mapper[TIn, TOut]) Pull(block BlockingType) (*TOut, error) {
 	if errors.Is(err, ErrEndOfData) {
 		return nil, ErrEndOfData
 	}
-	// if err != nil {
-	// 	return nil, &DataPullError{err:err}
-	// }
 	// if errors.Is(err, ErrNoDataYet) {
 	// 	return nil, ErrNoDataYet
 	// }
+	if err != nil {
+		return nil, &DataPullError{Err: err}
+	}
+
 	nextOut := mt.mapFn(*nextIn)
 
 	return &nextOut, nil
@@ -187,9 +190,10 @@ func (ft *Filter[T]) Pull(block BlockingType) (*T, error) {
 		// if errors.Is(err, ErrNoDataYet) {
 		// 	return nil, ErrNoDataYet
 		// }
-		// if err != nil {
-		// 	return nil, &DataPullError{err:err}
-		// }
+		if err != nil {
+			return nil, &DataPullError{Err: err}
+		}
+
 		if ft.predicate(*next) {
 			return next, nil
 		}
@@ -209,16 +213,15 @@ func NewTaker[T any](input Source[T], elCount int) *Taker[T] {
 
 // Pull emits the next element that satisfies the predicate.
 func (tt *Taker[T]) Pull(block BlockingType) (*T, error) {
-	next, _ := tt.input.Pull(block)
-	// next, err := tt.input.Pull(block)
-	// if errors.Is(err, ErrEndOfData) {
-	// 	return nil, ErrEndOfData
-	// }
+	next, err := tt.input.Pull(block)
+	if errors.Is(err, ErrEndOfData) {
+		return nil, ErrEndOfData
+	}
 	// if errors.Is(err, ErrNoDataYet) {
 	// 	return nil, ErrNoDataYet
 	// }
 	// if err != nil {
-	// 	return nil, &DataPullError{err:err}
+	// 	return nil, &DataPullError{Err:err}
 	// }
 	if tt.left <= 0 {
 		return nil, ErrEndOfData
@@ -287,12 +290,13 @@ func (rt *ReduceTransformer[TIn, TOut]) Pull(block BlockingType) (*TOut, error) 
 
 		return rt.Pull(block)
 	}
-	// if err != nil {
-	// 	return nil, err
-	// }
 	// if errors.Is(err, ErrNoDataYet) {
 	// 	return nil, ErrNoDataYet
 	// }
+	if err != nil {
+		return nil, &DataPullError{Err: err}
+	}
+
 	rt.buffer, rt.accumulator = rt.reducer(rt.accumulator, *next)
 
 	return rt.Pull(block)
@@ -324,9 +328,10 @@ func (rc *Reducer[TIn, TOut]) Reduce(input Source[TIn]) (TOut, error) {
 		if errors.Is(err, ErrEndOfData) {
 			return acc, nil
 		}
-		// if err != nil {
-		// 	return * new(TOut), &DataPullError{err:err}
-		// }
+
+		if err != nil {
+			return *new(TOut), &DataPullError{Err: err}
+		}
 		// 	if next != nil { // In blocking mode, this should always be true.
 		acc = rc.reducer(acc, *next) // 	}
 	}

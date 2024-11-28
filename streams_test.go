@@ -9,6 +9,16 @@ import (
 	"github.com/loren-osborn/streams"
 )
 
+const (
+	DataPullErrorSrcErrStr = "Data pull failed: source error"
+)
+
+// ErrTestSourceError is a synthetic source error used for testing.
+var ErrTestSourceError = errors.New("source error")
+
+// ErrTestOriginalError is a synthetic original error used for testing.
+var ErrTestOriginalError = errors.New("original error")
+
 // TestSliceSource validates the behavior of SliceSource.
 func TestSliceSource(t *testing.T) {
 	t.Parallel()
@@ -181,4 +191,110 @@ func ExampleReducer() {
 
 	result, _ := consumer.Reduce(filter)
 	fmt.Println(result) // Output: 20
+}
+
+// TestDataPullError validates DataPullError formatting.
+func TestDataPullError(t *testing.T) {
+	t.Parallel()
+
+	dataPullErr := &streams.DataPullError{Err: ErrTestOriginalError}
+
+	expectedMsg := "Data pull failed: original error"
+	if dataPullErr.Error() != expectedMsg {
+		t.Fatalf("expected %q, got %q", expectedMsg, dataPullErr.Error())
+	}
+}
+
+// TestSliceSinkAppendError validates error handling in SliceSink.Append.
+func TestSliceSinkAppendError(t *testing.T) {
+	t.Parallel()
+
+	data := []int{1, 2, 3, 4, 5}
+	source := streams.SourceFunc[int](func(_ streams.BlockingType) (*int, error) {
+		return nil, ErrTestSourceError
+	})
+	sink := streams.NewSliceSink(&data)
+
+	_, err := sink.Append(source)
+	if err == nil || err.Error() != DataPullErrorSrcErrStr {
+		t.Fatalf("expected data pull error, got %v", err)
+	}
+}
+
+// TestMapperErrorHandling tests Mapper error handling when input source returns errors.
+func TestMapperErrorHandling(t *testing.T) {
+	t.Parallel()
+
+	source := streams.SourceFunc[int](func(_ streams.BlockingType) (*int, error) {
+		return nil, ErrTestSourceError
+	})
+	mapper := streams.NewMapper(source, func(n int) int { return n * 2 })
+
+	_, err := mapper.Pull(streams.Blocking)
+	if err == nil || err.Error() != DataPullErrorSrcErrStr {
+		t.Fatalf("expected data pull error, got %v", err)
+	}
+}
+
+// TestFilterErrorHandling tests Filter error handling when input source returns errors.
+func TestFilterErrorHandling(t *testing.T) {
+	t.Parallel()
+
+	source := streams.SourceFunc[int](func(_ streams.BlockingType) (*int, error) {
+		return nil, ErrTestSourceError
+	})
+	filter := streams.NewFilter(source, func(n int) bool { return n%2 == 0 })
+
+	_, err := filter.Pull(streams.Blocking)
+	if err == nil || err.Error() != DataPullErrorSrcErrStr {
+		t.Fatalf("expected data pull error, got %v", err)
+	}
+}
+
+// TestTakerErrorHandling tests error handling in Taker.
+func TestTakerErrorHandling(t *testing.T) {
+	t.Parallel()
+
+	source := streams.SourceFunc[int](func(_ streams.BlockingType) (*int, error) {
+		return nil, streams.ErrEndOfData
+	})
+	taker := streams.NewTaker(source, 3)
+
+	_, err := taker.Pull(streams.Blocking)
+	if !errors.Is(err, streams.ErrEndOfData) {
+		t.Fatalf("expected ErrEndOfData, got %v", err)
+	}
+}
+
+// TestReduceTransformerErrorHandling tests ReduceTransformer error handling.
+func TestReduceTransformerErrorHandling(t *testing.T) {
+	t.Parallel()
+
+	source := streams.SourceFunc[int](func(_ streams.BlockingType) (*int, error) {
+		return nil, ErrTestSourceError
+	})
+	reducer := func(acc []int, next int) ([]int, []int) {
+		return append(acc, next), nil
+	}
+	transformer := streams.NewReduceTransformer(source, reducer)
+
+	_, err := transformer.Pull(streams.Blocking)
+	if err == nil || err.Error() != DataPullErrorSrcErrStr {
+		t.Fatalf("expected data pull error, got %v", err)
+	}
+}
+
+// TestReducerErrorHandling tests Reducer error handling when source returns errors.
+func TestReducerErrorHandling(t *testing.T) {
+	t.Parallel()
+
+	source := streams.SourceFunc[int](func(_ streams.BlockingType) (*int, error) {
+		return nil, ErrTestSourceError
+	})
+	reducer := streams.NewReducer(0, func(acc, next int) int { return acc + next })
+
+	_, err := reducer.Reduce(source)
+	if err == nil || err.Error() != DataPullErrorSrcErrStr {
+		t.Fatalf("expected data pull error, got %v", err)
+	}
 }
