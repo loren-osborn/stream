@@ -49,10 +49,10 @@ func TestFindNonDivisibleNumbers(t *testing.T) {
 	}
 
 	for idx, testCase := range tests {
-		result1 := predictSieveCapacity(testCase.primes, testCase.sieveSize)
+		result1 := predictSieveCapacity(testCase.primes)
 		if result1 != len(testCase.expected) {
-			t.Errorf("case %d: predictSieveCapacity(%v, %d): expected %v, got %v",
-				idx, testCase.primes, testCase.sieveSize, len(testCase.expected), result1)
+			t.Errorf("case %d: predictSieveCapacity(%v): expected %v, got %v",
+				idx, testCase.primes, len(testCase.expected), result1)
 		}
 
 		result2 := findNonDivisibleNumbers(testCase.primes, testCase.sieveSize)
@@ -134,15 +134,10 @@ func calculateSieveSize(smallPrimes []int) int {
 }
 
 // predictSieveCapacity calculates the number of members in the sieve.
-func predictSieveCapacity(smallPrimes []int, sieveSize int) int {
+func predictSieveCapacity(smallPrimes []int) int {
 	source := streams.NewSliceSource(smallPrimes)
 
-	consumer := streams.NewReducer(
-		sieveSize,
-		func(acc, next int) int {
-			return acc * (next - 1) / next
-		},
-	)
+	consumer := streams.NewReducer(1, func(acc, next int) int { return acc * (next - 1) })
 
 	result, err := consumer.Reduce(source)
 	if err != nil {
@@ -154,7 +149,7 @@ func predictSieveCapacity(smallPrimes []int, sieveSize int) int {
 
 // findNonDivisibleNumbers calculates the members of the sieve.
 func findNonDivisibleNumbers(smallPrimes []int, sieveSize int) []int {
-	sieveCapacity := predictSieveCapacity(smallPrimes, sieveSize)
+	sieveCapacity := predictSieveCapacity(smallPrimes)
 	nonDivNums := make([]int, 0, sieveCapacity)
 	sink := streams.NewSliceSink(&nonDivNums)
 	counter := 0
