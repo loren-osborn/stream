@@ -1,4 +1,4 @@
-package streams_test
+package stream_test
 
 import (
 	"errors"
@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	//nolint:depguard // package under test.
-	"github.com/loren-osborn/streams"
+	"github.com/loren-osborn/stream"
 )
 
 const (
@@ -24,10 +24,10 @@ func TestSliceSource(t *testing.T) {
 	t.Parallel()
 
 	data := []int{1, 2, 3, 4, 5}
-	source := streams.NewSliceSource(data)
+	source := stream.NewSliceSource(data)
 
 	for _, expected := range data {
-		value, err := source.Pull(streams.Blocking)
+		value, err := source.Pull(stream.Blocking)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -39,8 +39,8 @@ func TestSliceSource(t *testing.T) {
 		}
 	}
 
-	value, err := source.Pull(streams.Blocking)
-	if !errors.Is(err, streams.ErrEndOfData) {
+	value, err := source.Pull(stream.Blocking)
+	if !errors.Is(err, stream.ErrEndOfData) {
 		t.Fatalf("expected ErrEndOfData, got %v", err)
 	}
 
@@ -54,12 +54,12 @@ func TestMapper(t *testing.T) {
 	t.Parallel()
 
 	data := []int{1, 2, 3, 4, 5}
-	source := streams.NewSliceSource(data)
-	mapper := streams.NewMapper(source, func(n int) int { return n * 2 }) // Double each value
+	source := stream.NewSliceSource(data)
+	mapper := stream.NewMapper(source, func(n int) int { return n * 2 }) // Double each value
 
 	expected := []int{2, 4, 6, 8, 10}
 	for _, exp := range expected {
-		value, err := mapper.Pull(streams.Blocking)
+		value, err := mapper.Pull(stream.Blocking)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -71,8 +71,8 @@ func TestMapper(t *testing.T) {
 		}
 	}
 
-	value, err := mapper.Pull(streams.Blocking)
-	if !errors.Is(err, streams.ErrEndOfData) {
+	value, err := mapper.Pull(stream.Blocking)
+	if !errors.Is(err, stream.ErrEndOfData) {
 		t.Fatalf("expected ErrEndOfData, got %v", err)
 	}
 
@@ -86,12 +86,12 @@ func TestFilter(t *testing.T) {
 	t.Parallel()
 
 	data := []int{1, 2, 3, 4, 5}
-	source := streams.NewSliceSource(data)
-	filter := streams.NewFilter(source, func(n int) bool { return n%2 == 0 }) // Even numbers
+	source := stream.NewSliceSource(data)
+	filter := stream.NewFilter(source, func(n int) bool { return n%2 == 0 }) // Even numbers
 
 	expected := []int{2, 4}
 	for _, exp := range expected {
-		value, err := filter.Pull(streams.Blocking)
+		value, err := filter.Pull(stream.Blocking)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -103,8 +103,8 @@ func TestFilter(t *testing.T) {
 		}
 	}
 
-	value, err := filter.Pull(streams.Blocking)
-	if !errors.Is(err, streams.ErrEndOfData) {
+	value, err := filter.Pull(stream.Blocking)
+	if !errors.Is(err, stream.ErrEndOfData) {
 		t.Fatalf("expected ErrEndOfData, got %v", err)
 	}
 
@@ -118,8 +118,8 @@ func TestReducer(t *testing.T) {
 	t.Parallel()
 
 	data := []int{1, 2, 3, 4, 5}
-	source := streams.NewSliceSource(data)
-	consumer := streams.NewReducer(0, func(acc, next int) int { return acc + next })
+	source := stream.NewSliceSource(data)
+	consumer := stream.NewReducer(0, func(acc, next int) int { return acc + next })
 
 	result, err := consumer.Reduce(source)
 	if err != nil {
@@ -136,7 +136,7 @@ func TestReduceTransformer(t *testing.T) {
 	t.Parallel()
 
 	data := []int{1, 2, 3, 4, 5}
-	source := streams.NewSliceSource(data)
+	source := stream.NewSliceSource(data)
 
 	itCount := 0
 	reducer := func(acc []int, next int) ([]int, []int) {
@@ -154,11 +154,11 @@ func TestReduceTransformer(t *testing.T) {
 		return nil, acc
 	}
 
-	transformer := streams.NewReduceTransformer(source, reducer)
+	transformer := stream.NewReduceTransformer(source, reducer)
 
 	expected := []int{6, 9}
 	for _, exp := range expected {
-		value, err := transformer.Pull(streams.Blocking)
+		value, err := transformer.Pull(stream.Blocking)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -170,8 +170,8 @@ func TestReduceTransformer(t *testing.T) {
 		}
 	}
 
-	value, err := transformer.Pull(streams.Blocking)
-	if !errors.Is(err, streams.ErrEndOfData) {
+	value, err := transformer.Pull(stream.Blocking)
+	if !errors.Is(err, stream.ErrEndOfData) {
 		t.Fatalf("expected ErrEndOfData, got %v", err)
 	}
 
@@ -183,11 +183,11 @@ func TestReduceTransformer(t *testing.T) {
 // ExampleReducer demonstrates a complete pipeline of producers, transformers, and consumers.
 func ExampleReducer() {
 	data := []int{1, 2, 3, 4, 5}
-	source := streams.NewSliceSource(data)
+	source := stream.NewSliceSource(data)
 
-	mapper := streams.NewMapper(source, func(n int) int { return n * n })     // Square each number
-	filter := streams.NewFilter(mapper, func(n int) bool { return n%2 == 0 }) // Keep even squares
-	consumer := streams.NewReducer(0, func(acc, next int) int { return acc + next })
+	mapper := stream.NewMapper(source, func(n int) int { return n * n })     // Square each number
+	filter := stream.NewFilter(mapper, func(n int) bool { return n%2 == 0 }) // Keep even squares
+	consumer := stream.NewReducer(0, func(acc, next int) int { return acc + next })
 
 	result, _ := consumer.Reduce(filter)
 	fmt.Println(result) // Output: 20
@@ -197,7 +197,7 @@ func ExampleReducer() {
 func TestDataPullError(t *testing.T) {
 	t.Parallel()
 
-	dataPullErr := &streams.DataPullError{Err: ErrTestOriginalError}
+	dataPullErr := &stream.DataPullError{Err: ErrTestOriginalError}
 
 	expectedMsg := "Data pull failed: original error"
 	if dataPullErr.Error() != expectedMsg {
@@ -210,10 +210,10 @@ func TestSliceSinkAppendError(t *testing.T) {
 	t.Parallel()
 
 	data := []int{1, 2, 3, 4, 5}
-	source := streams.SourceFunc[int](func(_ streams.BlockingType) (*int, error) {
+	source := stream.SourceFunc[int](func(_ stream.BlockingType) (*int, error) {
 		return nil, ErrTestSourceError
 	})
-	sink := streams.NewSliceSink(&data)
+	sink := stream.NewSliceSink(&data)
 
 	_, err := sink.Append(source)
 	if err == nil || err.Error() != DataPullErrorSrcErrStr {
@@ -225,12 +225,12 @@ func TestSliceSinkAppendError(t *testing.T) {
 func TestMapperErrorHandling(t *testing.T) {
 	t.Parallel()
 
-	source := streams.SourceFunc[int](func(_ streams.BlockingType) (*int, error) {
+	source := stream.SourceFunc[int](func(_ stream.BlockingType) (*int, error) {
 		return nil, ErrTestSourceError
 	})
-	mapper := streams.NewMapper(source, func(n int) int { return n * 2 })
+	mapper := stream.NewMapper(source, func(n int) int { return n * 2 })
 
-	_, err := mapper.Pull(streams.Blocking)
+	_, err := mapper.Pull(stream.Blocking)
 	if err == nil || err.Error() != DataPullErrorSrcErrStr {
 		t.Fatalf("expected data pull error, got %v", err)
 	}
@@ -240,12 +240,12 @@ func TestMapperErrorHandling(t *testing.T) {
 func TestFilterErrorHandling(t *testing.T) {
 	t.Parallel()
 
-	source := streams.SourceFunc[int](func(_ streams.BlockingType) (*int, error) {
+	source := stream.SourceFunc[int](func(_ stream.BlockingType) (*int, error) {
 		return nil, ErrTestSourceError
 	})
-	filter := streams.NewFilter(source, func(n int) bool { return n%2 == 0 })
+	filter := stream.NewFilter(source, func(n int) bool { return n%2 == 0 })
 
-	_, err := filter.Pull(streams.Blocking)
+	_, err := filter.Pull(stream.Blocking)
 	if err == nil || err.Error() != DataPullErrorSrcErrStr {
 		t.Fatalf("expected data pull error, got %v", err)
 	}
@@ -255,13 +255,13 @@ func TestFilterErrorHandling(t *testing.T) {
 func TestTakerErrorHandling(t *testing.T) {
 	t.Parallel()
 
-	source := streams.SourceFunc[int](func(_ streams.BlockingType) (*int, error) {
-		return nil, streams.ErrEndOfData
+	source := stream.SourceFunc[int](func(_ stream.BlockingType) (*int, error) {
+		return nil, stream.ErrEndOfData
 	})
-	taker := streams.NewTaker(source, 3)
+	taker := stream.NewTaker(source, 3)
 
-	_, err := taker.Pull(streams.Blocking)
-	if !errors.Is(err, streams.ErrEndOfData) {
+	_, err := taker.Pull(stream.Blocking)
+	if !errors.Is(err, stream.ErrEndOfData) {
 		t.Fatalf("expected ErrEndOfData, got %v", err)
 	}
 }
@@ -270,15 +270,15 @@ func TestTakerErrorHandling(t *testing.T) {
 func TestReduceTransformerErrorHandling(t *testing.T) {
 	t.Parallel()
 
-	source := streams.SourceFunc[int](func(_ streams.BlockingType) (*int, error) {
+	source := stream.SourceFunc[int](func(_ stream.BlockingType) (*int, error) {
 		return nil, ErrTestSourceError
 	})
 	reducer := func(acc []int, next int) ([]int, []int) {
 		return append(acc, next), nil
 	}
-	transformer := streams.NewReduceTransformer(source, reducer)
+	transformer := stream.NewReduceTransformer(source, reducer)
 
-	_, err := transformer.Pull(streams.Blocking)
+	_, err := transformer.Pull(stream.Blocking)
 	if err == nil || err.Error() != DataPullErrorSrcErrStr {
 		t.Fatalf("expected data pull error, got %v", err)
 	}
@@ -288,10 +288,10 @@ func TestReduceTransformerErrorHandling(t *testing.T) {
 func TestReducerErrorHandling(t *testing.T) {
 	t.Parallel()
 
-	source := streams.SourceFunc[int](func(_ streams.BlockingType) (*int, error) {
+	source := stream.SourceFunc[int](func(_ stream.BlockingType) (*int, error) {
 		return nil, ErrTestSourceError
 	})
-	reducer := streams.NewReducer(0, func(acc, next int) int { return acc + next })
+	reducer := stream.NewReducer(0, func(acc, next int) int { return acc + next })
 
 	_, err := reducer.Reduce(source)
 	if err == nil || err.Error() != DataPullErrorSrcErrStr {

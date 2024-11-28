@@ -1,4 +1,4 @@
-// Package streams provides tools for lazy evaluation and data transformation pipelines.
+// Package stream provides tools for lazy evaluation and data transformation pipelines.
 //
 // # Overview
 //
@@ -15,8 +15,8 @@
 // - SliceSource: Wraps a slice to act as a source.
 // - Map: Transforms elements of one type into another.
 // - Filter: Filters elements based on a predicate.
-// - Reduce: Reduces an entire stream to a single value.
-// - ReduceTransformer: Incrementally reduces a stream while emitting intermediate results.
+// - Reduce: Reduces an entire source to a single value.
+// - ReduceTransformer: Incrementally reduces a source while emitting intermediate results.
 //
 // # Examples
 //
@@ -47,7 +47,7 @@
 //
 //	result, _ := consumer.Consume(source)
 //	fmt.Println(result) // Output: 15
-package streams
+package stream
 
 import (
 	"errors"
@@ -62,13 +62,13 @@ const (
 	Blocking    BlockingType = true
 )
 
-// ErrEndOfData is returned by Pull when the stream has no more data to produce.
+// ErrEndOfData is returned by Pull when the source has no more data to produce.
 var ErrEndOfData = errors.New("end of data")
 
-// ErrNoDataYet is returned by Pull(NonBlocking) when the stream has no more data yet.
+// ErrNoDataYet is returned by Pull(NonBlocking) when the source has no more data yet.
 var ErrNoDataYet = errors.New("data not ready")
 
-// DataPullError is returned by Pull when the stream is not ErrEndOfData and
+// DataPullError is returned by Pull when the source is not ErrEndOfData and
 // Pull()ing data results in an error.
 type DataPullError struct {
 	Err error
@@ -140,7 +140,7 @@ func (ss *SliceSink[T]) Append(input Source[T]) (*[]T, error) {
 	}
 }
 
-// Mapper applies a mapping function to a stream, transforming TIn elements into TOut.
+// Mapper applies a mapping function to a source, transforming TIn elements into TOut.
 type Mapper[TIn, TOut any] struct {
 	input Source[TIn]
 	mapFn func(TIn) TOut
@@ -169,7 +169,7 @@ func (mt *Mapper[TIn, TOut]) Pull(block BlockingType) (*TOut, error) {
 	return &nextOut, nil
 }
 
-// Filter filters elements in a stream based on a predicate.
+// Filter filters elements in a source based on a predicate.
 type Filter[T any] struct {
 	input     Source[T]
 	predicate func(T) bool
@@ -200,7 +200,7 @@ func (ft *Filter[T]) Pull(block BlockingType) (*T, error) {
 	}
 }
 
-// Filter filters elements in a stream based on a predicate.
+// Filter filters elements in a source based on a predicate.
 type Taker[T any] struct {
 	input Source[T]
 	left  int
@@ -246,7 +246,7 @@ func (tt *Taker[T]) Pull(block BlockingType) (*T, error) {
 // 	}
 // }
 
-// ReduceTransformer applies a reduction function to a stream, producing finalized elements incrementally.
+// ReduceTransformer applies a reduction function to a source, producing finalized elements incrementally.
 type ReduceTransformer[TIn, TOut any] struct {
 	input       Source[TIn]
 	reducer     func([]TOut, TIn) ([]TOut, []TOut)
@@ -302,7 +302,7 @@ func (rt *ReduceTransformer[TIn, TOut]) Pull(block BlockingType) (*TOut, error) 
 	return rt.Pull(block)
 }
 
-// Reducer consumes an entire input stream and reduces it to a single output value.
+// Reducer consumes an entire input source and reduces it to a single output value.
 type Reducer[TIn, TOut any] struct {
 	reducer    func(acc TOut, next TIn) TOut
 	initialAcc TOut

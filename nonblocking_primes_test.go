@@ -1,4 +1,4 @@
-package streams_test
+package stream_test
 
 import (
 	"errors"
@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	//nolint:depguard // package under test.
-	"github.com/loren-osborn/streams"
+	"github.com/loren-osborn/stream"
 )
 
 func TestInternalSieveSize(t *testing.T) {
@@ -67,20 +67,20 @@ func TestInternalBootstrapPrimeSourceAndPull(t *testing.T) {
 	t.Parallel()
 
 	primes := []int{2, 3, 5}
-	stream := bootstrapPrimeSource(primes)
+	source := bootstrapPrimeSource(primes)
 
-	VerifyPrimeBootstrap(t, primes, stream)
-	VerifyPrimeSourcePull(t, stream)
+	VerifyPrimeBootstrap(t, primes, source)
+	VerifyPrimeSourcePull(t, source)
 }
 
 func TestInternalNewPrimeSource(t *testing.T) {
 	t.Parallel()
 
 	primes := []int{2, 3, 5}
-	stream := NewPrimeSource(len(primes))
+	source := NewPrimeSource(len(primes))
 
-	VerifyPrimeBootstrap(t, primes, stream)
-	VerifyPrimeSourcePull(t, stream)
+	VerifyPrimeBootstrap(t, primes, source)
+	VerifyPrimeSourcePull(t, source)
 }
 
 func VerifyPrimeBootstrap(t *testing.T, primes []int, primeStream *PrimeSource) {
@@ -119,12 +119,12 @@ func VerifyPrimeBootstrap(t *testing.T, primes []int, primeStream *PrimeSource) 
 	}
 }
 
-func VerifyPrimeSourcePull(t *testing.T, primeStream streams.Source[int]) {
+func VerifyPrimeSourcePull(t *testing.T, primeStream stream.Source[int]) {
 	t.Helper()
 
 	expectedPrimes := []int{2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47}
 	for _, expected := range expectedPrimes {
-		val, err := primeStream.Pull(streams.Blocking) // Blocking mode
+		val, err := primeStream.Pull(stream.Blocking) // Blocking mode
 		if err != nil {
 			t.Fatalf("Unexpected error: %v", err)
 		}
@@ -139,12 +139,12 @@ func VerifyPrimeSourcePull(t *testing.T, primeStream streams.Source[int]) {
 	}
 
 	// Non-blocking behavior should return nil (49 is not prime)
-	val, err := primeStream.Pull(streams.NonBlocking)
+	val, err := primeStream.Pull(stream.NonBlocking)
 	if val != nil {
 		t.Errorf("Expected (nil, data not ready) in non-blocking mode, got (%v, %v)", val, err)
 	}
 
-	if !errors.Is(err, streams.ErrNoDataYet) {
+	if !errors.Is(err, stream.ErrNoDataYet) {
 		t.Fatalf("expected ErrNoDataYet, got %v", err)
 	}
 }
@@ -166,11 +166,11 @@ func slicesEqual[T comparable](aSlice, bSlice []T) bool {
 
 // calculateSieveSize calculates the sieve size for a list of primes. This is
 // far from the most efficient way to do this, but it's serving as an example of
-// how to use streams.
+// how to use sources.
 func calculateSieveSize(smallPrimes []int) int {
-	source := streams.NewSliceSource(smallPrimes)
+	source := stream.NewSliceSource(smallPrimes)
 
-	consumer := streams.NewReducer(1, func(acc, next int) int { return acc * next })
+	consumer := stream.NewReducer(1, func(acc, next int) int { return acc * next })
 
 	result, err := consumer.Reduce(source)
 	if err != nil {
@@ -182,9 +182,9 @@ func calculateSieveSize(smallPrimes []int) int {
 
 // predictSieveCapacity calculates the number of members in the sieve.
 func predictSieveCapacity(smallPrimes []int) int {
-	source := streams.NewSliceSource(smallPrimes)
+	source := stream.NewSliceSource(smallPrimes)
 
-	consumer := streams.NewReducer(1, func(acc, next int) int { return acc * (next - 1) })
+	consumer := stream.NewReducer(1, func(acc, next int) int { return acc * (next - 1) })
 
 	result, err := consumer.Reduce(source)
 	if err != nil {
@@ -198,9 +198,9 @@ func predictSieveCapacity(smallPrimes []int) int {
 func findNonDivisibleNumbers(smallPrimes []int, sieveSize int) []int {
 	sieveCapacity := predictSieveCapacity(smallPrimes)
 	nonDivNums := make([]int, 0, sieveCapacity)
-	sink := streams.NewSliceSink(&nonDivNums)
+	sink := stream.NewSliceSink(&nonDivNums)
 	counter := 0
-	source := streams.SourceFunc[int](func(_ streams.BlockingType) (*int, error) {
+	source := stream.SourceFunc[int](func(_ stream.BlockingType) (*int, error) {
 		if counter < sieveSize {
 			val := counter
 			counter++
@@ -208,9 +208,9 @@ func findNonDivisibleNumbers(smallPrimes []int, sieveSize int) []int {
 			return &val, nil
 		}
 
-		return nil, streams.ErrEndOfData
+		return nil, stream.ErrEndOfData
 	})
-	filter := streams.NewFilter(source, func(val int) bool {
+	filter := stream.NewFilter(source, func(val int) bool {
 		for _, factor := range smallPrimes {
 			if val%factor == 0 {
 				return false
@@ -243,7 +243,7 @@ type PrimeSource struct {
 
 // NewPrimeSource creates a new PrimeSource to generate primes from a fixed sieve.
 // While not the most efficient prime generator, it gives an opportunity to demo
-// non-blocking stream behavior.
+// non-blocking source behavior.
 func NewPrimeSource(sievePrimeCount int) *PrimeSource {
 	if sievePrimeCount < 1 {
 		panic(fmt.Sprintf("invalid sievePrimeCount: %d", sievePrimeCount))
@@ -252,13 +252,13 @@ func NewPrimeSource(sievePrimeCount int) *PrimeSource {
 	initialPrimeSource := bootstrapPrimeSource([]int{2})
 
 	if sievePrimeCount == 1 {
-		panic("how are we here?") // return initialPrimeSource
+		return initialPrimeSource
 	}
 
 	smallPrimesSlice := make([]int, 0, sievePrimeCount)
-	smallPrimeGenerator := streams.NewSliceSink(&smallPrimesSlice)
+	smallPrimeGenerator := stream.NewSliceSink(&smallPrimesSlice)
 
-	primes, err := smallPrimeGenerator.Append(streams.NewTaker(initialPrimeSource, sievePrimeCount))
+	primes, err := smallPrimeGenerator.Append(stream.NewTaker(initialPrimeSource, sievePrimeCount))
 	if err != nil {
 		panic(fmt.Sprintf("Got unexpected error: %v", err))
 	}
@@ -281,7 +281,7 @@ func bootstrapPrimeSource(smallPrimes []int) *PrimeSource {
 }
 
 // Pull emits the next prime element.
-func (ps *PrimeSource) Pull(blocks streams.BlockingType) (*int, error) {
+func (ps *PrimeSource) Pull(blocks stream.BlockingType) (*int, error) {
 	if ps.counter < 0 {
 		idx := len(ps.smallPrimes) + ps.counter
 		ps.counter++
@@ -309,9 +309,9 @@ func (ps *PrimeSource) Pull(blocks streams.BlockingType) (*int, error) {
 		}
 
 		if potentialPrime%possibleFactor == 0 {
-			if blocks == streams.NonBlocking {
+			if blocks == stream.NonBlocking {
 				// we will only test one number per iteration for primeness.
-				return nil, streams.ErrNoDataYet
+				return nil, stream.ErrNoDataYet
 			}
 
 			return ps.Pull(blocks)
