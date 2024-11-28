@@ -8,7 +8,7 @@ linters:
     - ireturn
 issues:
   fix: true
-# linters-settings:
+linters-settings:
 #   testpackage:
 #     # Limited test access to private data.
 #     skip-regexp: private_test\.go
@@ -18,6 +18,6 @@ issues:
 #   nestif:
 #     # Default: 5
 #     min-complexity: 10
-#   cyclop:
-#     # Default: 10
-#     max-complexity: 13
+  cyclop:
+    # Default: 10
+    max-complexity: 13

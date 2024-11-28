@@ -65,11 +65,14 @@ const (
 // ErrEndOfData is returned by Pull when the source has no more data to produce.
 var ErrEndOfData = errors.New("end of data")
 
-// ErrNoDataYet is returned by Pull(NonBlocking) when the source has no more data yet.
+// ErrNoDataYet is returned by Pull(NonBlocking) when the source temporarily
+// runs out of data. This is a Sentinel condition and only indicates transient
+// system state. This error should only be considered "expected" in NonBlocking
+// mode.
 var ErrNoDataYet = errors.New("data not ready")
 
-// DataPullError is returned by Pull when the source is not ErrEndOfData and
-// Pull()ing data results in an error.
+// DataPullError is returned by Pull when the source is not ErrEndOfData (nor
+// ErrNoDataYet in NonBlocking mode) and Pull()ing data results in an error.
 type DataPullError struct {
 	Err error
 }

@@ -29,23 +29,23 @@ func TestSliceSource(t *testing.T) {
 	for _, expected := range data {
 		value, err := source.Pull(stream.Blocking)
 		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
+			t.Errorf("unexpected error: %v", err)
 		}
 
 		if value == nil {
-			t.Fatalf("expected %d, got nil", expected)
+			t.Errorf("expected %d, got nil", expected)
 		} else if *value != expected {
-			t.Fatalf("expected %d, got %d", expected, *value)
+			t.Errorf("expected %d, got %d", expected, *value)
 		}
 	}
 
 	value, err := source.Pull(stream.Blocking)
 	if !errors.Is(err, stream.ErrEndOfData) {
-		t.Fatalf("expected ErrEndOfData, got %v", err)
+		t.Errorf("expected ErrEndOfData, got %v", err)
 	}
 
 	if value != nil {
-		t.Fatalf("expected nil, got %v", value)
+		t.Errorf("expected nil, got %v", value)
 	}
 }
 
@@ -61,23 +61,23 @@ func TestMapper(t *testing.T) {
 	for _, exp := range expected {
 		value, err := mapper.Pull(stream.Blocking)
 		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
+			t.Errorf("unexpected error: %v", err)
 		}
 
 		if value == nil {
-			t.Fatalf("expected %d, got nil", exp)
+			t.Errorf("expected %d, got nil", exp)
 		} else if *value != exp {
-			t.Fatalf("expected %d, got %d", exp, *value)
+			t.Errorf("expected %d, got %d", exp, *value)
 		}
 	}
 
 	value, err := mapper.Pull(stream.Blocking)
 	if !errors.Is(err, stream.ErrEndOfData) {
-		t.Fatalf("expected ErrEndOfData, got %v", err)
+		t.Errorf("expected ErrEndOfData, got %v", err)
 	}
 
 	if value != nil {
-		t.Fatalf("expected nil, got %v", value)
+		t.Errorf("expected nil, got %v", value)
 	}
 }
 
@@ -93,23 +93,23 @@ func TestFilter(t *testing.T) {
 	for _, exp := range expected {
 		value, err := filter.Pull(stream.Blocking)
 		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
+			t.Errorf("unexpected error: %v", err)
 		}
 
 		if value == nil {
-			t.Fatalf("expected %d, got nil", exp)
+			t.Errorf("expected %d, got nil", exp)
 		} else if *value != exp {
-			t.Fatalf("expected %d, got %d", exp, *value)
+			t.Errorf("expected %d, got %d", exp, *value)
 		}
 	}
 
 	value, err := filter.Pull(stream.Blocking)
 	if !errors.Is(err, stream.ErrEndOfData) {
-		t.Fatalf("expected ErrEndOfData, got %v", err)
+		t.Errorf("expected ErrEndOfData, got %v", err)
 	}
 
 	if value != nil {
-		t.Fatalf("expected nil, got %v", value)
+		t.Errorf("expected nil, got %v", value)
 	}
 }
 
@@ -123,11 +123,11 @@ func TestReducer(t *testing.T) {
 
 	result, err := consumer.Reduce(source)
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Errorf("unexpected error: %v", err)
 	}
 
 	if result != 15 { // Sum of 1 to 5
-		t.Fatalf("expected 15, got %d", result)
+		t.Errorf("expected 15, got %d", result)
 	}
 }
 
@@ -160,37 +160,24 @@ func TestReduceTransformer(t *testing.T) {
 	for _, exp := range expected {
 		value, err := transformer.Pull(stream.Blocking)
 		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
+			t.Errorf("unexpected error: %v", err)
 		}
 
 		if value == nil {
-			t.Fatalf("expected %d, got nil", exp)
+			t.Errorf("expected %d, got nil", exp)
 		} else if *value != exp {
-			t.Fatalf("expected %d, got %d", exp, value)
+			t.Errorf("expected %d, got %d", exp, value)
 		}
 	}
 
 	value, err := transformer.Pull(stream.Blocking)
 	if !errors.Is(err, stream.ErrEndOfData) {
-		t.Fatalf("expected ErrEndOfData, got %v", err)
+		t.Errorf("expected ErrEndOfData, got %v", err)
 	}
 
 	if value != nil {
-		t.Fatalf("expected nil, got %v", value)
+		t.Errorf("expected nil, got %v", value)
 	}
-}
-
-// ExampleReducer demonstrates a complete pipeline of producers, transformers, and consumers.
-func ExampleReducer() {
-	data := []int{1, 2, 3, 4, 5}
-	source := stream.NewSliceSource(data)
-
-	mapper := stream.NewMapper(source, func(n int) int { return n * n })     // Square each number
-	filter := stream.NewFilter(mapper, func(n int) bool { return n%2 == 0 }) // Keep even squares
-	consumer := stream.NewReducer(0, func(acc, next int) int { return acc + next })
-
-	result, _ := consumer.Reduce(filter)
-	fmt.Println(result) // Output: 20
 }
 
 // TestDataPullError validates DataPullError formatting.
@@ -201,7 +188,33 @@ func TestDataPullError(t *testing.T) {
 
 	expectedMsg := "Data pull failed: original error"
 	if dataPullErr.Error() != expectedMsg {
-		t.Fatalf("expected %q, got %q", expectedMsg, dataPullErr.Error())
+		t.Errorf("expected %q, got %q", expectedMsg, dataPullErr.Error())
+	}
+}
+
+type sinkErrorTestCase struct {
+	name          string
+	sourceError   error
+	expectedError error
+}
+
+func getSinkErrorTestCases() []sinkErrorTestCase {
+	return []sinkErrorTestCase{
+		{
+			name:          "EndOfData",
+			sourceError:   stream.ErrEndOfData,
+			expectedError: nil,
+		},
+		{
+			name:          "ErrNoDataYet not expected when blocking",
+			sourceError:   stream.ErrNoDataYet,
+			expectedError: &stream.DataPullError{Err: stream.ErrNoDataYet},
+		},
+		{
+			name:          "ErrorHandling",
+			sourceError:   ErrTestOriginalError,
+			expectedError: &stream.DataPullError{Err: ErrTestOriginalError},
+		},
 	}
 }
 
@@ -209,15 +222,42 @@ func TestDataPullError(t *testing.T) {
 func TestSliceSinkAppendError(t *testing.T) {
 	t.Parallel()
 
-	data := []int{1, 2, 3, 4, 5}
-	source := stream.SourceFunc[int](func(_ stream.BlockingType) (*int, error) {
-		return nil, ErrTestSourceError
-	})
-	sink := stream.NewSliceSink(&data)
+	for _, testCase := range getSinkErrorTestCases() {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
 
-	_, err := sink.Append(source)
-	if err == nil || err.Error() != DataPullErrorSrcErrStr {
-		t.Fatalf("expected data pull error, got %v", err)
+			source := stream.SourceFunc[int](func(block stream.BlockingType) (*int, error) {
+				if block != stream.Blocking {
+					t.Errorf("expected Pull(Blocking), got Pull(NonBlocking)")
+				}
+
+				return nil, testCase.sourceError
+			})
+
+			dummyDest := []int{}
+			sink := stream.NewSliceSink(&dummyDest)
+
+			val, err := sink.Append(source)
+
+			if testCase.expectedError != nil && val != nil {
+				if err == nil {
+					t.Errorf("Got non-nil value %v when error expected", val)
+				} else {
+					t.Errorf("Got non-nil value %v with non-nil error %v", val, err)
+				}
+			}
+
+			switch {
+			case testCase.expectedError == nil && err != nil:
+				t.Errorf("Got non-nil error %v when none expected", err)
+			case testCase.expectedError != nil && err == nil:
+				t.Errorf("Got no error when expecting %v", testCase.expectedError)
+			case testCase.expectedError != nil && err != nil:
+				if testCase.expectedError.Error() != err.Error() {
+					t.Errorf("Got error %v when expecting error %v", err, testCase.expectedError)
+				}
+			}
+		})
 	}
 }
 
@@ -232,7 +272,7 @@ func TestMapperErrorHandling(t *testing.T) {
 
 	_, err := mapper.Pull(stream.Blocking)
 	if err == nil || err.Error() != DataPullErrorSrcErrStr {
-		t.Fatalf("expected data pull error, got %v", err)
+		t.Errorf("expected data pull error, got %v", err)
 	}
 }
 
@@ -247,7 +287,7 @@ func TestFilterErrorHandling(t *testing.T) {
 
 	_, err := filter.Pull(stream.Blocking)
 	if err == nil || err.Error() != DataPullErrorSrcErrStr {
-		t.Fatalf("expected data pull error, got %v", err)
+		t.Errorf("expected data pull error, got %v", err)
 	}
 }
 
@@ -262,7 +302,7 @@ func TestTakerErrorHandling(t *testing.T) {
 
 	_, err := taker.Pull(stream.Blocking)
 	if !errors.Is(err, stream.ErrEndOfData) {
-		t.Fatalf("expected ErrEndOfData, got %v", err)
+		t.Errorf("expected ErrEndOfData, got %v", err)
 	}
 }
 
@@ -280,7 +320,7 @@ func TestReduceTransformerErrorHandling(t *testing.T) {
 
 	_, err := transformer.Pull(stream.Blocking)
 	if err == nil || err.Error() != DataPullErrorSrcErrStr {
-		t.Fatalf("expected data pull error, got %v", err)
+		t.Errorf("expected data pull error, got %v", err)
 	}
 }
 
@@ -295,6 +335,19 @@ func TestReducerErrorHandling(t *testing.T) {
 
 	_, err := reducer.Reduce(source)
 	if err == nil || err.Error() != DataPullErrorSrcErrStr {
-		t.Fatalf("expected data pull error, got %v", err)
+		t.Errorf("expected data pull error, got %v", err)
 	}
+}
+
+// ExampleReducer demonstrates a complete pipeline of producers, transformers, and consumers.
+func ExampleReducer() {
+	data := []int{1, 2, 3, 4, 5}
+	source := stream.NewSliceSource(data)
+
+	mapper := stream.NewMapper(source, func(n int) int { return n * n })     // Square each number
+	filter := stream.NewFilter(mapper, func(n int) bool { return n%2 == 0 }) // Keep even squares
+	consumer := stream.NewReducer(0, func(acc, next int) int { return acc + next })
+
+	result, _ := consumer.Reduce(filter)
+	fmt.Println(result) // Output: 20
 }
