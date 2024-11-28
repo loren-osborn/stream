@@ -9,7 +9,7 @@ import (
 	"github.com/loren-osborn/streams"
 )
 
-func TestSieveSize(t *testing.T) {
+func TestInternalSieveSize(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -30,7 +30,7 @@ func TestSieveSize(t *testing.T) {
 	}
 }
 
-func TestFindNonDivisibleNumbers(t *testing.T) {
+func TestInternalFindNonDivisibleNumbers(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -63,21 +63,58 @@ func TestFindNonDivisibleNumbers(t *testing.T) {
 	}
 }
 
-func TestPrimeStream(t *testing.T) {
+func TestInternalBootstrapPrimeSourceAndPull(t *testing.T) {
 	t.Parallel()
 
 	primes := []int{2, 3, 5}
-	sieveSize := calculateSieveSize(primes)
-	nonDivisible := findNonDivisibleNumbers(primes, sieveSize)
+	stream := bootstrapPrimeSource(primes)
 
-	stream, err := NewPrimeStream(primes, sieveSize, nonDivisible)
-	if err != nil {
-		t.Fatalf("Unexpected error: %v", err)
+	VerifyPrimeBootstrap(t, primes, stream)
+	VerifyPrimeSourcePull(t, stream)
+}
+
+func VerifyPrimeBootstrap(t *testing.T, primes []int, primeStream *primeSource) {
+	t.Helper()
+
+	if primeStream == nil {
+		t.Fatalf("bootstrapPrimeSource returned nil")
+
+		return
 	}
+
+	if !slicesEqual(primes, primeStream.smallPrimes) {
+		t.Errorf("primeStream.smallPrimes improperly populated: expected %v, got %v",
+			primes, primeStream.smallPrimes)
+	}
+
+	if expectedSieveSize := calculateSieveSize(primes); expectedSieveSize != primeStream.sieveSize {
+		t.Errorf("primeStream.sieveSize improperly populated: expected %v, got %v",
+			expectedSieveSize, primeStream.sieveSize)
+	}
+
+	nonDivisible := findNonDivisibleNumbers(primes, primeStream.sieveSize)
+	if !slicesEqual(nonDivisible, primeStream.sieve) {
+		t.Errorf("primeStream.sieve improperly populated: expected %v, got %v",
+			nonDivisible, primeStream.sieve)
+	}
+
+	if len(primeStream.newPrimes) != 0 {
+		t.Errorf("slice primeStream.newPrimes not empty: expected [], got %v",
+			primeStream.newPrimes)
+	}
+
+	if cap(primeStream.newPrimes) <= len(primes) {
+		t.Errorf("slice primeStream.newPrimes not allocated enough size: expected > %d, got %d",
+			len(primes), cap(primeStream.newPrimes))
+	}
+}
+
+func VerifyPrimeSourcePull(t *testing.T, primeStream streams.Source[int]) {
+	t.Helper()
 
 	expectedPrimes := []int{2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47}
 	for _, expected := range expectedPrimes {
-		val, err := stream.Pull(streams.Blocking) // Blocking mode
+		val, err := primeStream.Pull(streams.Blocking) // Blocking mode
 		if err != nil {
 			t.Fatalf("Unexpected error: %v", err)
 		}
@@ -92,7 +129,7 @@ func TestPrimeStream(t *testing.T) {
 	}
 
 	// Non-blocking behavior should return nil (49 is not prime)
-	val, err := stream.Pull(streams.NonBlocking)
+	val, err := primeStream.Pull(streams.NonBlocking)
 	if val != nil {
 		t.Errorf("Expected (nil, data not ready) in non-blocking mode, got (%v, %v)", val, err)
 	}
@@ -185,8 +222,8 @@ func findNonDivisibleNumbers(smallPrimes []int, sieveSize int) []int {
 	return nonDivNums
 }
 
-// PrimeStream emits a list of prime integers.
-type PrimeStream struct {
+// primeSource emits a list of prime integers.
+type primeSource struct {
 	smallPrimes []int
 	sieveSize   int
 	sieve       []int
@@ -194,21 +231,24 @@ type PrimeStream struct {
 	counter     int // start at 0 - len(smallPrimes)
 }
 
-// NewPrimeStream creates a new PrimeStream to generate primes from a fixed sieve.
+// bootstrapPrimeSource creates a new primeSource to generate primes from a fixed sieve.
 // While not the most efficient prime generator, it gives an opportunity to demo
 // non-blocking stream behavior.
-func NewPrimeStream(smallPrimes []int, sieveSize int, sieve []int) (*PrimeStream, error) {
-	return &PrimeStream{
+func bootstrapPrimeSource(smallPrimes []int) *primeSource {
+	sieveSize := calculateSieveSize(smallPrimes)
+	nonDivisible := findNonDivisibleNumbers(smallPrimes, sieveSize)
+
+	return &primeSource{
 		smallPrimes: smallPrimes,
 		sieveSize:   sieveSize,
-		sieve:       sieve,
+		sieve:       nonDivisible,
 		newPrimes:   make([]int, 0, 4*len(smallPrimes)),
 		counter:     0 - len(smallPrimes),
-	}, nil
+	}
 }
 
 // Pull emits the next prime element.
-func (ps *PrimeStream) Pull(blocks streams.BlockingType) (*int, error) {
+func (ps *primeSource) Pull(blocks streams.BlockingType) (*int, error) {
 	if ps.counter < 0 {
 		idx := len(ps.smallPrimes) + ps.counter
 		ps.counter++
