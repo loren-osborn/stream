@@ -184,17 +184,64 @@ func (ft *Filter[T]) Pull(block BlockingType) (*T, error) {
 		if errors.Is(err, ErrEndOfData) {
 			return nil, ErrEndOfData
 		}
-		// if err != nil {
-		// 	return nil, &DataPullError{err:err}
-		// }
 		// if errors.Is(err, ErrNoDataYet) {
 		// 	return nil, ErrNoDataYet
+		// }
+		// if err != nil {
+		// 	return nil, &DataPullError{err:err}
 		// }
 		if ft.predicate(*next) {
 			return next, nil
 		}
 	}
 }
+
+// Filter filters elements in a stream based on a predicate.
+type Taker[T any] struct {
+	input Source[T]
+	left  int
+}
+
+// NewTaker creates a new Taker that only returns the first elCount elements.
+func NewTaker[T any](input Source[T], elCount int) *Taker[T] {
+	return &Taker[T]{input: input, left: elCount}
+}
+
+// Pull emits the next element that satisfies the predicate.
+func (tt *Taker[T]) Pull(block BlockingType) (*T, error) {
+	next, _ := tt.input.Pull(block)
+	// next, err := tt.input.Pull(block)
+	// if errors.Is(err, ErrEndOfData) {
+	// 	return nil, ErrEndOfData
+	// }
+	// if errors.Is(err, ErrNoDataYet) {
+	// 	return nil, ErrNoDataYet
+	// }
+	// if err != nil {
+	// 	return nil, &DataPullError{err:err}
+	// }
+	if tt.left <= 0 {
+		return nil, ErrEndOfData
+	}
+
+	tt.left--
+
+	return next, nil
+}
+
+// // NewDroper creates a new Taker that skips the first elCount elements.
+// func NewDroper[T any](input Source[T], elCount int) *Taker[T] {
+// 	skip := elCount
+// 	return &Filter[T]{
+// 		input: input,
+// 		predicate: func(T) bool {
+// 			if skip <= 0 {
+// 				return true
+// 			}
+// 			skip --
+// 		},
+// 	}
+// }
 
 // ReduceTransformer applies a reduction function to a stream, producing finalized elements incrementally.
 type ReduceTransformer[TIn, TOut any] struct {

@@ -73,7 +73,17 @@ func TestInternalBootstrapPrimeSourceAndPull(t *testing.T) {
 	VerifyPrimeSourcePull(t, stream)
 }
 
-func VerifyPrimeBootstrap(t *testing.T, primes []int, primeStream *primeSource) {
+func TestInternalNewPrimeSource(t *testing.T) {
+	t.Parallel()
+
+	primes := []int{2, 3, 5}
+	stream := NewPrimeSource(len(primes))
+
+	VerifyPrimeBootstrap(t, primes, stream)
+	VerifyPrimeSourcePull(t, stream)
+}
+
+func VerifyPrimeBootstrap(t *testing.T, primes []int, primeStream *PrimeSource) {
 	t.Helper()
 
 	if primeStream == nil {
@@ -222,8 +232,8 @@ func findNonDivisibleNumbers(smallPrimes []int, sieveSize int) []int {
 	return nonDivNums
 }
 
-// primeSource emits a list of prime integers.
-type primeSource struct {
+// PrimeSource emits a list of prime integers.
+type PrimeSource struct {
 	smallPrimes []int
 	sieveSize   int
 	sieve       []int
@@ -231,14 +241,37 @@ type primeSource struct {
 	counter     int // start at 0 - len(smallPrimes)
 }
 
-// bootstrapPrimeSource creates a new primeSource to generate primes from a fixed sieve.
+// NewPrimeSource creates a new PrimeSource to generate primes from a fixed sieve.
 // While not the most efficient prime generator, it gives an opportunity to demo
 // non-blocking stream behavior.
-func bootstrapPrimeSource(smallPrimes []int) *primeSource {
+func NewPrimeSource(sievePrimeCount int) *PrimeSource {
+	if sievePrimeCount < 1 {
+		panic(fmt.Sprintf("invalid sievePrimeCount: %d", sievePrimeCount))
+	}
+
+	initialPrimeSource := bootstrapPrimeSource([]int{2})
+
+	if sievePrimeCount == 1 {
+		panic("how are we here?") // return initialPrimeSource
+	}
+
+	smallPrimesSlice := make([]int, 0, sievePrimeCount)
+	smallPrimeGenerator := streams.NewSliceSink(&smallPrimesSlice)
+
+	primes, err := smallPrimeGenerator.Append(streams.NewTaker(initialPrimeSource, sievePrimeCount))
+	if err != nil {
+		panic(fmt.Sprintf("Got unexpected error: %v", err))
+	}
+
+	return bootstrapPrimeSource(*primes)
+}
+
+// bootstrapPrimeSource creates a new PrimeSource to generate primes from a fixed sieve.
+func bootstrapPrimeSource(smallPrimes []int) *PrimeSource {
 	sieveSize := calculateSieveSize(smallPrimes)
 	nonDivisible := findNonDivisibleNumbers(smallPrimes, sieveSize)
 
-	return &primeSource{
+	return &PrimeSource{
 		smallPrimes: smallPrimes,
 		sieveSize:   sieveSize,
 		sieve:       nonDivisible,
@@ -248,7 +281,7 @@ func bootstrapPrimeSource(smallPrimes []int) *primeSource {
 }
 
 // Pull emits the next prime element.
-func (ps *primeSource) Pull(blocks streams.BlockingType) (*int, error) {
+func (ps *PrimeSource) Pull(blocks streams.BlockingType) (*int, error) {
 	if ps.counter < 0 {
 		idx := len(ps.smallPrimes) + ps.counter
 		ps.counter++
