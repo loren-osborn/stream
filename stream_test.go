@@ -192,6 +192,21 @@ func TestDataPullError(t *testing.T) {
 	}
 }
 
+// TestDataPullErrorUnwrap validates DataPullError wrapping.
+func TestDataPullErrorUnwrap(t *testing.T) {
+	t.Parallel()
+
+	dataPullErr := &stream.DataPullError{Err: ErrTestOriginalError}
+
+	if unwrapped := dataPullErr.Unwrap(); !errors.Is(unwrapped, ErrTestOriginalError) {
+		t.Errorf("expected %v, got %v", ErrTestOriginalError, unwrapped)
+	}
+
+	if !errors.Is(dataPullErr, ErrTestOriginalError) {
+		t.Errorf("expected DataPullError(%v), to compare equal to original error %v", dataPullErr, ErrTestOriginalError)
+	}
+}
+
 type sinkErrorTestCase struct {
 	name          string
 	sourceError   error
@@ -261,66 +276,143 @@ func TestSliceSinkAppendError(t *testing.T) {
 	}
 }
 
-// TestMapperErrorHandling tests Mapper error handling when input source returns errors.
-func TestMapperErrorHandling(t *testing.T) {
-	t.Parallel()
+type transformErrorTestCase struct {
+	name          string
+	block         stream.BlockingType
+	sourceError   error
+	expectedError error
+}
 
-	source := stream.SourceFunc[int](func(_ stream.BlockingType) (*int, error) {
-		return nil, ErrTestSourceError
-	})
-	mapper := stream.NewMapper(source, func(n int) int { return n * 2 })
-
-	_, err := mapper.Pull(stream.Blocking)
-	if err == nil || err.Error() != DataPullErrorSrcErrStr {
-		t.Errorf("expected data pull error, got %v", err)
+func getTransformErrorTestCases() []transformErrorTestCase {
+	return []transformErrorTestCase{
+		{
+			name:          "EndOfData blocking",
+			block:         stream.Blocking,
+			sourceError:   stream.ErrEndOfData,
+			expectedError: stream.ErrEndOfData,
+		},
+		{
+			name:          "EndOfData non-blocking",
+			block:         stream.NonBlocking,
+			sourceError:   stream.ErrEndOfData,
+			expectedError: stream.ErrEndOfData,
+		},
+		{
+			name:          "ErrNoDataYet not expected when blocking",
+			block:         stream.Blocking,
+			sourceError:   stream.ErrNoDataYet,
+			expectedError: &stream.DataPullError{Err: stream.ErrNoDataYet},
+		},
+		{
+			name:          "ErrNoDataYet non-blocking",
+			block:         stream.NonBlocking,
+			sourceError:   stream.ErrNoDataYet,
+			expectedError: stream.ErrNoDataYet,
+		},
+		{
+			name:          "ErrorHandling blocking",
+			block:         stream.Blocking,
+			sourceError:   ErrTestOriginalError,
+			expectedError: &stream.DataPullError{Err: ErrTestOriginalError},
+		},
+		{
+			name:          "ErrorHandling non-blocking",
+			block:         stream.NonBlocking,
+			sourceError:   ErrTestOriginalError,
+			expectedError: &stream.DataPullError{Err: ErrTestOriginalError},
+		},
 	}
 }
 
-// TestFilterErrorHandling tests Filter error handling when input source returns errors.
-func TestFilterErrorHandling(t *testing.T) {
-	t.Parallel()
+type transformerOutputTestCase[T any] struct {
+	name      string
+	generator func(stream.Source[T], stream.BlockingType) func() (*T, error)
+}
 
-	source := stream.SourceFunc[int](func(_ stream.BlockingType) (*int, error) {
-		return nil, ErrTestSourceError
-	})
-	filter := stream.NewFilter(source, func(n int) bool { return n%2 == 0 })
+func getTransformerIntOutputTestCase() []transformerOutputTestCase[int] {
+	return []transformerOutputTestCase[int]{
+		{
+			name: "Mapper",
+			generator: func(src stream.Source[int], blk stream.BlockingType) func() (*int, error) {
+				mapper := stream.NewMapper(src, func(n int) int { return n * 2 })
 
-	_, err := filter.Pull(stream.Blocking)
-	if err == nil || err.Error() != DataPullErrorSrcErrStr {
-		t.Errorf("expected data pull error, got %v", err)
+				return func() (*int, error) {
+					return mapper.Pull(blk)
+				}
+			},
+		},
+		{
+			name: "Filter",
+			generator: func(src stream.Source[int], blk stream.BlockingType) func() (*int, error) {
+				filter := stream.NewFilter(src, func(n int) bool { return n%2 == 0 })
+
+				return func() (*int, error) {
+					return filter.Pull(blk)
+				}
+			},
+		},
+		{
+			name: "Taker",
+			generator: func(src stream.Source[int], blk stream.BlockingType) func() (*int, error) {
+				taker := stream.NewTaker(src, 3)
+
+				return func() (*int, error) {
+					return taker.Pull(blk)
+				}
+			},
+		},
+		{
+			name: "ReduceTransformer",
+			generator: func(src stream.Source[int], blk stream.BlockingType) func() (*int, error) {
+				reducer := func(acc []int, next int) ([]int, []int) {
+					return append(acc, next), nil
+				}
+				transformer := stream.NewReduceTransformer(src, reducer)
+
+				return func() (*int, error) {
+					return transformer.Pull(blk)
+				}
+			},
+		},
 	}
 }
 
-// TestTakerErrorHandling tests error handling in Taker.
-func TestTakerErrorHandling(t *testing.T) {
+// TestTransformerErrorHandling tests stream transformers for consistent error handling.
+func TestTransformerErrorHandling(t *testing.T) {
 	t.Parallel()
 
-	source := stream.SourceFunc[int](func(_ stream.BlockingType) (*int, error) {
-		return nil, stream.ErrEndOfData
-	})
-	taker := stream.NewTaker(source, 3)
+	for _, testCase := range CartesianProduct(getTransformErrorTestCases(), getTransformerIntOutputTestCase()) {
+		t.Run(fmt.Sprintf("%s %s", testCase.Second.name, testCase.First.name), func(t *testing.T) {
+			t.Parallel()
 
-	_, err := taker.Pull(stream.Blocking)
-	if !errors.Is(err, stream.ErrEndOfData) {
-		t.Errorf("expected ErrEndOfData, got %v", err)
-	}
-}
+			if testCase.First.expectedError == nil {
+				t.Errorf("BAD TEST: Should expect an error")
+			}
 
-// TestReduceTransformerErrorHandling tests ReduceTransformer error handling.
-func TestReduceTransformerErrorHandling(t *testing.T) {
-	t.Parallel()
+			source := stream.SourceFunc[int](func(block stream.BlockingType) (*int, error) {
+				if block != testCase.First.block {
+					t.Errorf("expected Pull(%v), got Pull(%v)", testCase.First.block, block)
+				}
 
-	source := stream.SourceFunc[int](func(_ stream.BlockingType) (*int, error) {
-		return nil, ErrTestSourceError
-	})
-	reducer := func(acc []int, next int) ([]int, []int) {
-		return append(acc, next), nil
-	}
-	transformer := stream.NewReduceTransformer(source, reducer)
+				return nil, testCase.First.sourceError
+			})
 
-	_, err := transformer.Pull(stream.Blocking)
-	if err == nil || err.Error() != DataPullErrorSrcErrStr {
-		t.Errorf("expected data pull error, got %v", err)
+			puller := testCase.Second.generator(source, testCase.First.block)
+
+			val, err := puller()
+
+			if val != nil {
+				if err == nil {
+					t.Errorf("Got non-nil value %v when error expected", val)
+				} else {
+					t.Errorf("Got non-nil value %v with non-nil error %v", val, err)
+				}
+			}
+
+			if err == nil || err.Error() != testCase.First.expectedError.Error() {
+				t.Errorf("expected %v, got %v", testCase.First.expectedError, err)
+			}
+		})
 	}
 }
 
@@ -337,6 +429,25 @@ func TestReducerErrorHandling(t *testing.T) {
 	if err == nil || err.Error() != DataPullErrorSrcErrStr {
 		t.Errorf("expected data pull error, got %v", err)
 	}
+}
+
+// Pair represents a pair of values of types A and B.
+type Pair[A, B any] struct {
+	First  A
+	Second B
+}
+
+// CartesianProduct generates the Cartesian product of two slices and returns a slice of Pair structs.
+func CartesianProduct[A, B any](a []A, b []B) []Pair[A, B] {
+	result := make([]Pair[A, B], 0, len(a)*len(b))
+
+	for _, elemA := range a {
+		for _, elemB := range b {
+			result = append(result, Pair[A, B]{First: elemA, Second: elemB})
+		}
+	}
+
+	return result
 }
 
 // ExampleReducer demonstrates a complete pipeline of producers, transformers, and consumers.

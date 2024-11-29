@@ -66,9 +66,9 @@ const (
 var ErrEndOfData = errors.New("end of data")
 
 // ErrNoDataYet is returned by Pull(NonBlocking) when the source temporarily
-// runs out of data. This is a Sentinel condition and only indicates transient
+// runs out of data. This is a sentinel condition and only indicates transient
 // system state. This error should only be considered "expected" in NonBlocking
-// mode.
+// mode and is only handled as sentinel error in this mode.
 var ErrNoDataYet = errors.New("data not ready")
 
 // DataPullError is returned by Pull when the source is not ErrEndOfData (nor
@@ -80,6 +80,11 @@ type DataPullError struct {
 // Error returns a helpful error message.
 func (e *DataPullError) Error() string {
 	return fmt.Sprintf("Data pull failed: %v", e.Err)
+}
+
+// Unwrap returns the error wrapped by DataPullError.
+func (e *DataPullError) Unwrap() error {
+	return e.Err
 }
 
 // Source represents a source of data that can pull elements one at a time.
@@ -157,13 +162,12 @@ func NewMapper[TIn, TOut any](input Source[TIn], mapFn func(TIn) TOut) *Mapper[T
 // Pull transforms the next input element using the mapping function.
 func (mt *Mapper[TIn, TOut]) Pull(block BlockingType) (*TOut, error) {
 	nextIn, err := mt.input.Pull(block)
-	if errors.Is(err, ErrEndOfData) {
-		return nil, ErrEndOfData
-	}
-	// if errors.Is(err, ErrNoDataYet) {
-	// 	return nil, ErrNoDataYet
-	// }
 	if err != nil {
+		if errors.Is(err, ErrEndOfData) || ((block == NonBlocking) && errors.Is(err, ErrNoDataYet)) {
+			//nolint:wrapcheck // Don't wrap sentinal errors.
+			return nil, err
+		}
+
 		return nil, &DataPullError{Err: err}
 	}
 
@@ -187,13 +191,12 @@ func NewFilter[T any](input Source[T], predicate func(T) bool) *Filter[T] {
 func (ft *Filter[T]) Pull(block BlockingType) (*T, error) {
 	for {
 		next, err := ft.input.Pull(block)
-		if errors.Is(err, ErrEndOfData) {
-			return nil, ErrEndOfData
-		}
-		// if errors.Is(err, ErrNoDataYet) {
-		// 	return nil, ErrNoDataYet
-		// }
 		if err != nil {
+			if errors.Is(err, ErrEndOfData) || ((block == NonBlocking) && errors.Is(err, ErrNoDataYet)) {
+				//nolint:wrapcheck // Don't wrap sentinal errors.
+				return nil, err
+			}
+
 			return nil, &DataPullError{Err: err}
 		}
 
@@ -217,15 +220,15 @@ func NewTaker[T any](input Source[T], elCount int) *Taker[T] {
 // Pull emits the next element that satisfies the predicate.
 func (tt *Taker[T]) Pull(block BlockingType) (*T, error) {
 	next, err := tt.input.Pull(block)
-	if errors.Is(err, ErrEndOfData) {
-		return nil, ErrEndOfData
+	if err != nil {
+		if errors.Is(err, ErrEndOfData) || ((block == NonBlocking) && errors.Is(err, ErrNoDataYet)) {
+			//nolint:wrapcheck // Don't wrap sentinal errors.
+			return nil, err
+		}
+
+		return nil, &DataPullError{Err: err}
 	}
-	// if errors.Is(err, ErrNoDataYet) {
-	// 	return nil, ErrNoDataYet
-	// }
-	// if err != nil {
-	// 	return nil, &DataPullError{Err:err}
-	// }
+
 	if tt.left <= 0 {
 		return nil, ErrEndOfData
 	}
@@ -286,17 +289,17 @@ func (rt *ReduceTransformer[TIn, TOut]) Pull(block BlockingType) (*TOut, error) 
 	}
 
 	next, err := rt.input.Pull(block)
-	if errors.Is(err, ErrEndOfData) {
-		rt.eod = err
-		rt.buffer = rt.accumulator
-		rt.accumulator = nil
-
-		return rt.Pull(block)
-	}
-	// if errors.Is(err, ErrNoDataYet) {
-	// 	return nil, ErrNoDataYet
-	// }
 	if err != nil {
+		if errors.Is(err, ErrEndOfData) {
+			rt.eod = err
+			rt.buffer = rt.accumulator
+			rt.accumulator = nil
+
+			return rt.Pull(block)
+		} else if (block == NonBlocking) && errors.Is(err, ErrNoDataYet) {
+			return nil, ErrNoDataYet
+		}
+
 		return nil, &DataPullError{Err: err}
 	}
 
