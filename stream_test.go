@@ -3,6 +3,7 @@ package stream_test
 import (
 	"errors"
 	"fmt"
+	"reflect"
 	"testing"
 
 	//nolint:depguard // package under test.
@@ -206,12 +207,49 @@ func getSinkErrorTestCases() []sinkErrorTestCase {
 	}
 }
 
-// TestSliceSinkAppendError validates error handling in SliceSink.Append.
-func TestSliceSinkAppendError(t *testing.T) {
+type sinkOutputTestCase[T any] struct {
+	name      string
+	generator func(stream.Source[T]) (any, error) // returning any, because we only care about nil-ness
+}
+
+func getSinkOutputTestCase() []sinkOutputTestCase[int] {
+	return []sinkOutputTestCase[int]{
+		{
+			name: "SliceSink",
+			generator: func(src stream.Source[int]) (any, error) {
+				dummyDest := []int{}
+				sink := stream.NewSliceSink(&dummyDest)
+
+				return sink.Append(src)
+			},
+		},
+		{
+			name: "Reducer",
+			generator: func(src stream.Source[int]) (any, error) {
+				reducer := stream.NewReducer(
+					nil,
+					func(acc []int, next int) []int {
+						if acc == nil {
+							acc = []int{0}
+						}
+
+						return []int{acc[0] + next}
+					},
+				)
+
+				return reducer.Reduce(src)
+			},
+		},
+	}
+}
+
+// TestSinkErrorHandling validates error handling in SliceSink.Append() and Reducer.Reduce().
+func TestSinkErrorHandling(t *testing.T) {
 	t.Parallel()
 
-	for _, testCase := range getSinkErrorTestCases() {
-		t.Run(testCase.name, func(t *testing.T) {
+	for _, testCase := range CartesianProduct(getSinkErrorTestCases(), getSinkOutputTestCase()) {
+		// range getSinkErrorTestCases() {
+		t.Run(fmt.Sprintf("%s %s", testCase.Second.name, testCase.First.name), func(t *testing.T) {
 			t.Parallel()
 
 			source := stream.SourceFunc[int](func(block stream.BlockingType) (*int, error) {
@@ -219,15 +257,12 @@ func TestSliceSinkAppendError(t *testing.T) {
 					t.Errorf("expected Pull(Blocking), got Pull(NonBlocking)")
 				}
 
-				return nil, testCase.sourceError
+				return nil, testCase.First.sourceError
 			})
 
-			dummyDest := []int{}
-			sink := stream.NewSliceSink(&dummyDest)
+			val, err := testCase.Second.generator(source)
 
-			val, err := sink.Append(source)
-
-			if testCase.expectedError != nil && val != nil {
+			if testCase.First.expectedError != nil && !(reflect.ValueOf(val).IsNil()) {
 				if err == nil {
 					t.Errorf("Got non-nil value %v when error expected", val)
 				} else {
@@ -236,13 +271,13 @@ func TestSliceSinkAppendError(t *testing.T) {
 			}
 
 			switch {
-			case testCase.expectedError == nil && err != nil:
+			case testCase.First.expectedError == nil && err != nil:
 				t.Errorf("Got non-nil error %v when none expected", err)
-			case testCase.expectedError != nil && err == nil:
-				t.Errorf("Got no error when expecting %v", testCase.expectedError)
-			case testCase.expectedError != nil && err != nil:
-				if testCase.expectedError.Error() != err.Error() {
-					t.Errorf("Got error %v when expecting error %v", err, testCase.expectedError)
+			case testCase.First.expectedError != nil && err == nil:
+				t.Errorf("Got no error when expecting %v", testCase.First.expectedError)
+			case testCase.First.expectedError != nil && err != nil:
+				if testCase.First.expectedError.Error() != err.Error() {
+					t.Errorf("Got error %v when expecting error %v", err, testCase.First.expectedError)
 				}
 			}
 		})
@@ -386,21 +421,6 @@ func TestTransformerErrorHandling(t *testing.T) {
 				t.Errorf("expected %v, got %v", testCase.First.expectedError, err)
 			}
 		})
-	}
-}
-
-// TestReducerErrorHandling tests Reducer error handling when source returns errors.
-func TestReducerErrorHandling(t *testing.T) {
-	t.Parallel()
-
-	source := stream.SourceFunc[int](func(_ stream.BlockingType) (*int, error) {
-		return nil, ErrTestSourceError
-	})
-	reducer := stream.NewReducer(0, func(acc, next int) int { return acc + next })
-
-	_, err := reducer.Reduce(source)
-	if err == nil || err.Error() != DataPullErrorSrcErrStr {
-		t.Errorf("expected data pull error, got %v", err)
 	}
 }
 

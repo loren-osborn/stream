@@ -334,8 +334,8 @@ func (rc *Reducer[TIn, TOut]) Reduce(input Source[TIn]) (TOut, error) {
 			switch {
 			case errors.Is(err, ErrEndOfData):
 				return acc, nil
-			// case errors.Is(err, ErrNoDataYet):
-			// 	return *new(TOut), fmt.Errorf("unexpected sentinel error: %w", err)
+			case errors.Is(err, ErrNoDataYet):
+				return *new(TOut), fmt.Errorf("unexpected sentinel error: %w", err)
 			default:
 				return *new(TOut), fmt.Errorf("data pull failed: %w", err)
 			}
