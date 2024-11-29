@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	DataPullErrorSrcErrStr = "Data pull failed: source error"
+	DataPullErrorSrcErrStr = "data pull failed: source error"
 )
 
 // ErrTestSourceError is a synthetic source error used for testing.
@@ -180,33 +180,6 @@ func TestReduceTransformer(t *testing.T) {
 	}
 }
 
-// TestDataPullError validates DataPullError formatting.
-func TestDataPullError(t *testing.T) {
-	t.Parallel()
-
-	dataPullErr := &stream.DataPullError{Err: ErrTestOriginalError}
-
-	expectedMsg := "Data pull failed: original error"
-	if dataPullErr.Error() != expectedMsg {
-		t.Errorf("expected %q, got %q", expectedMsg, dataPullErr.Error())
-	}
-}
-
-// TestDataPullErrorUnwrap validates DataPullError wrapping.
-func TestDataPullErrorUnwrap(t *testing.T) {
-	t.Parallel()
-
-	dataPullErr := &stream.DataPullError{Err: ErrTestOriginalError}
-
-	if unwrapped := dataPullErr.Unwrap(); !errors.Is(unwrapped, ErrTestOriginalError) {
-		t.Errorf("expected %v, got %v", ErrTestOriginalError, unwrapped)
-	}
-
-	if !errors.Is(dataPullErr, ErrTestOriginalError) {
-		t.Errorf("expected DataPullError(%v), to compare equal to original error %v", dataPullErr, ErrTestOriginalError)
-	}
-}
-
 type sinkErrorTestCase struct {
 	name          string
 	sourceError   error
@@ -223,12 +196,12 @@ func getSinkErrorTestCases() []sinkErrorTestCase {
 		{
 			name:          "ErrNoDataYet not expected when blocking",
 			sourceError:   stream.ErrNoDataYet,
-			expectedError: &stream.DataPullError{Err: stream.ErrNoDataYet},
+			expectedError: fmt.Errorf("unexpected sentinel error: %w", stream.ErrNoDataYet),
 		},
 		{
 			name:          "ErrorHandling",
 			sourceError:   ErrTestOriginalError,
-			expectedError: &stream.DataPullError{Err: ErrTestOriginalError},
+			expectedError: fmt.Errorf("data pull failed: %w", ErrTestOriginalError),
 		},
 	}
 }
@@ -301,7 +274,7 @@ func getTransformErrorTestCases() []transformErrorTestCase {
 			name:          "ErrNoDataYet not expected when blocking",
 			block:         stream.Blocking,
 			sourceError:   stream.ErrNoDataYet,
-			expectedError: &stream.DataPullError{Err: stream.ErrNoDataYet},
+			expectedError: fmt.Errorf("unexpected sentinel error: %w", stream.ErrNoDataYet),
 		},
 		{
 			name:          "ErrNoDataYet non-blocking",
@@ -313,13 +286,13 @@ func getTransformErrorTestCases() []transformErrorTestCase {
 			name:          "ErrorHandling blocking",
 			block:         stream.Blocking,
 			sourceError:   ErrTestOriginalError,
-			expectedError: &stream.DataPullError{Err: ErrTestOriginalError},
+			expectedError: fmt.Errorf("data pull failed: %w", ErrTestOriginalError),
 		},
 		{
 			name:          "ErrorHandling non-blocking",
 			block:         stream.NonBlocking,
 			sourceError:   ErrTestOriginalError,
-			expectedError: &stream.DataPullError{Err: ErrTestOriginalError},
+			expectedError: fmt.Errorf("data pull failed: %w", ErrTestOriginalError),
 		},
 	}
 }
