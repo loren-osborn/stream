@@ -395,6 +395,38 @@ func TestTransformerErrorHandling(t *testing.T) {
 	}
 }
 
+// TestNewDropperBasic tests the basic functionality of the NewDropper function.
+func TestNewDropperBasic(t *testing.T) {
+	t.Parallel()
+
+	data := []int{1, 2, 3, 4, 5, 6, 7}
+	source := stream.NewSliceSource(data)
+	dropper := stream.NewDropper(source, 3) // Skip the first 3 elements
+
+	expected := []int{4, 5, 6, 7}
+	for _, exp := range expected {
+		value, err := dropper.Pull(stream.Blocking)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if value == nil {
+			t.Fatalf("expected %d, got nil", exp)
+		} else if *value != exp {
+			t.Fatalf("expected %d, got %d", exp, *value)
+		}
+	}
+
+	value, err := dropper.Pull(stream.Blocking)
+	if !errors.Is(err, stream.ErrEndOfData) {
+		t.Fatalf("expected ErrEndOfData, got %v", err)
+	}
+
+	if value != nil {
+		t.Fatalf("expected nil, got %v", value)
+	}
+}
+
 // Pair represents a pair of values of types A and B.
 type Pair[A, B any] struct {
 	First  A

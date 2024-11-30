@@ -234,19 +234,22 @@ func (tt *Taker[T]) Pull(block BlockingType) (*T, error) {
 	return next, nil
 }
 
-// // NewDroper creates a new Taker that skips the first elCount elements.
-// func NewDroper[T any](input Source[T], elCount int) *Taker[T] {
-// 	skip := elCount
-// 	return &Filter[T]{
-// 		input: input,
-// 		predicate: func(T) bool {
-// 			if skip <= 0 {
-// 				return true
-// 			}
-// 			skip --
-// 		},
-// 	}
-// }
+// NewDropper creates a new Taker that skips the first elCount elements.
+func NewDropper[T any](input Source[T], elCount int) *Filter[T] {
+	skip := elCount
+
+	return &Filter[T]{
+		input: input,
+		predicate: func(T) bool {
+			if skip <= 0 {
+				return true
+			}
+			skip--
+
+			return false
+		},
+	}
+}
 
 // ReduceTransformer applies a reduction function to a source, producing finalized elements incrementally.
 type ReduceTransformer[TIn, TOut any] struct {
