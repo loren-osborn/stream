@@ -29,9 +29,7 @@ func TestSliceSource(t *testing.T) {
 
 	for _, expected := range data {
 		value, err := source.Pull(stream.Blocking)
-		if err != nil {
-			t.Errorf("unexpected error: %v", err)
-		}
+		assertError(t, err, nil)
 
 		if value == nil {
 			t.Errorf("expected %d, got nil", expected)
@@ -41,9 +39,7 @@ func TestSliceSource(t *testing.T) {
 	}
 
 	value, err := source.Pull(stream.Blocking)
-	if !errors.Is(err, stream.ErrEndOfData) {
-		t.Errorf("expected ErrEndOfData, got %v", err)
-	}
+	assertError(t, err, stream.ErrEndOfData)
 
 	if value != nil {
 		t.Errorf("expected nil, got %v", value)
@@ -61,9 +57,7 @@ func TestMapper(t *testing.T) {
 	expected := []int{2, 4, 6, 8, 10}
 	for _, exp := range expected {
 		value, err := mapper.Pull(stream.Blocking)
-		if err != nil {
-			t.Errorf("unexpected error: %v", err)
-		}
+		assertError(t, err, nil)
 
 		if value == nil {
 			t.Errorf("expected %d, got nil", exp)
@@ -73,9 +67,7 @@ func TestMapper(t *testing.T) {
 	}
 
 	value, err := mapper.Pull(stream.Blocking)
-	if !errors.Is(err, stream.ErrEndOfData) {
-		t.Errorf("expected ErrEndOfData, got %v", err)
-	}
+	assertError(t, err, stream.ErrEndOfData)
 
 	if value != nil {
 		t.Errorf("expected nil, got %v", value)
@@ -93,9 +85,7 @@ func TestFilter(t *testing.T) {
 	expected := []int{2, 4}
 	for _, exp := range expected {
 		value, err := filter.Pull(stream.Blocking)
-		if err != nil {
-			t.Errorf("unexpected error: %v", err)
-		}
+		assertError(t, err, nil)
 
 		if value == nil {
 			t.Errorf("expected %d, got nil", exp)
@@ -105,9 +95,7 @@ func TestFilter(t *testing.T) {
 	}
 
 	value, err := filter.Pull(stream.Blocking)
-	if !errors.Is(err, stream.ErrEndOfData) {
-		t.Errorf("expected ErrEndOfData, got %v", err)
-	}
+	assertError(t, err, stream.ErrEndOfData)
 
 	if value != nil {
 		t.Errorf("expected nil, got %v", value)
@@ -123,9 +111,7 @@ func TestReducer(t *testing.T) {
 	consumer := stream.NewReducer(0, func(acc, next int) int { return acc + next })
 
 	result, err := consumer.Reduce(source)
-	if err != nil {
-		t.Errorf("unexpected error: %v", err)
-	}
+	assertError(t, err, nil)
 
 	if result != 15 { // Sum of 1 to 5
 		t.Errorf("expected 15, got %d", result)
@@ -160,9 +146,7 @@ func TestReduceTransformer(t *testing.T) {
 	expected := []int{6, 9}
 	for _, exp := range expected {
 		value, err := transformer.Pull(stream.Blocking)
-		if err != nil {
-			t.Errorf("unexpected error: %v", err)
-		}
+		assertError(t, err, nil)
 
 		if value == nil {
 			t.Errorf("expected %d, got nil", exp)
@@ -172,9 +156,7 @@ func TestReduceTransformer(t *testing.T) {
 	}
 
 	value, err := transformer.Pull(stream.Blocking)
-	if !errors.Is(err, stream.ErrEndOfData) {
-		t.Errorf("expected ErrEndOfData, got %v", err)
-	}
+	assertError(t, err, stream.ErrEndOfData)
 
 	if value != nil {
 		t.Errorf("expected nil, got %v", value)
@@ -270,16 +252,7 @@ func TestSinkErrorHandling(t *testing.T) {
 				}
 			}
 
-			switch {
-			case testCase.First.expectedError == nil && err != nil:
-				t.Errorf("Got non-nil error %v when none expected", err)
-			case testCase.First.expectedError != nil && err == nil:
-				t.Errorf("Got no error when expecting %v", testCase.First.expectedError)
-			case testCase.First.expectedError != nil && err != nil:
-				if testCase.First.expectedError.Error() != err.Error() {
-					t.Errorf("Got error %v when expecting error %v", err, testCase.First.expectedError)
-				}
-			}
+			assertErrorString(t, err, testCase.First.expectedError)
 		})
 	}
 }
@@ -417,9 +390,7 @@ func TestTransformerErrorHandling(t *testing.T) {
 				}
 			}
 
-			if err == nil || err.Error() != testCase.First.expectedError.Error() {
-				t.Errorf("expected %v, got %v", testCase.First.expectedError, err)
-			}
+			assertErrorString(t, err, testCase.First.expectedError)
 		})
 	}
 }
@@ -441,6 +412,39 @@ func CartesianProduct[A, B any](a []A, b []B) []Pair[A, B] {
 	}
 
 	return result
+}
+
+// assertError validates that `got` is the error we `want`.
+func assertError(t *testing.T, got, want error) {
+	t.Helper()
+
+	if want == nil {
+		if got != nil {
+			t.Errorf("expected no error, got %v", got)
+		}
+	} else {
+		if !errors.Is(got, want) {
+			t.Errorf("expected error %v, got %v", want, got)
+		}
+	}
+}
+
+// assertErrorString validates that `got` is the error we `want`.
+func assertErrorString(t *testing.T, got, want error) {
+	t.Helper()
+
+	//nolint:nestif // *FIXME*: for now
+	if want == nil {
+		if got != nil {
+			t.Errorf("expected no error, got %v", got)
+		}
+	} else {
+		if !errors.Is(got, want) {
+			if (got == nil) || (got.Error() != want.Error()) {
+				t.Errorf("expected error %v, got %v", want, got)
+			}
+		}
+	}
 }
 
 // ExampleReducer demonstrates a complete pipeline of producers, transformers, and consumers.
