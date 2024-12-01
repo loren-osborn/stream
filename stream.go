@@ -73,15 +73,34 @@ var ErrNoDataYet = errors.New("data not ready")
 
 // Source represents a source of data that can pull elements one at a time.
 type Source[T any] interface {
-	Pull(block BlockingType) (*T, error)
+	Pull(block BlockingType) (*T, error) // Returns the next element.
+	Close()                              // Lets the consumer tell the source that no more data will be Pull()ed.
+}
+
+// SliceSink is simple way to capture the result of a source into a slice.
+type sourceFunc[T any] struct {
+	srcFunc   func(BlockingType) (*T, error)
+	closeFunc func()
+}
+
+// Pull proxies the call to the source lambda.
+func (sf *sourceFunc[T]) Pull(blocks BlockingType) (*T, error) {
+	return sf.srcFunc(blocks)
+}
+
+// Close tells the source no more data will be Pull()ed.
+func (sf *sourceFunc[T]) Close() {
+	if sf.closeFunc != nil {
+		sf.closeFunc()
+	}
 }
 
 // SourceFunc lets a lambda become a source.
-type SourceFunc[T any] func(BlockingType) (*T, error)
-
-// Pull proxies the call to the source lambda.
-func (sf SourceFunc[T]) Pull(blocks BlockingType) (*T, error) {
-	return sf(blocks)
+func SourceFunc[T any](srcFunc func(BlockingType) (*T, error), closeFunc func()) Source[T] {
+	return &sourceFunc[T]{
+		srcFunc:   srcFunc,
+		closeFunc: closeFunc,
+	}
 }
 
 // SliceSource is a producer backed by a slice of elements.
@@ -97,6 +116,8 @@ func NewSliceSource[T any](data []T) *SliceSource[T] {
 // Pull emits the next element from the slice or returns ErrEndOfData if all elements are produced.
 func (sp *SliceSource[T]) Pull(_ BlockingType) (*T, error) {
 	if len(sp.data) < 1 {
+		sp.Close() // Free unused slice
+
 		return nil, ErrEndOfData
 	}
 
@@ -104,6 +125,11 @@ func (sp *SliceSource[T]) Pull(_ BlockingType) (*T, error) {
 	sp.data = sp.data[1:]
 
 	return &value, nil
+}
+
+// Close tells the source no more data will be Pull()ed.
+func (sp *SliceSource[T]) Close() {
+	sp.data = nil
 }
 
 // SliceSink is simple way to capture the result of a source into a slice.
@@ -166,6 +192,11 @@ func (mt *Mapper[TIn, TOut]) Pull(block BlockingType) (*TOut, error) {
 	return &nextOut, nil
 }
 
+// Close tells the source no more data will be Pull()ed.
+func (mt *Mapper[TIn, TOut]) Close() {
+	mt.input.Close()
+}
+
 // Filter filters elements in a source based on a predicate.
 type Filter[T any] struct {
 	input     Source[T]
@@ -199,6 +230,11 @@ func (ft *Filter[T]) Pull(block BlockingType) (*T, error) {
 	}
 }
 
+// Close tells the source no more data will be Pull()ed.
+func (ft *Filter[T]) Close() {
+	ft.input.Close()
+}
+
 // Filter filters elements in a source based on a predicate.
 type Taker[T any] struct {
 	input Source[T]
@@ -226,12 +262,19 @@ func (tt *Taker[T]) Pull(block BlockingType) (*T, error) {
 	}
 
 	if tt.left <= 0 {
+		tt.Close()
+
 		return nil, ErrEndOfData
 	}
 
 	tt.left--
 
 	return next, nil
+}
+
+// Close tells the source no more data will be Pull()ed.
+func (tt *Taker[T]) Close() {
+	tt.input.Close()
 }
 
 // NewDropper creates a new Taker that skips the first elCount elements.

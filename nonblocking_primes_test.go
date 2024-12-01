@@ -209,7 +209,7 @@ func findNonDivisibleNumbers(smallPrimes []int, sieveSize int) []int {
 		}
 
 		return nil, stream.ErrEndOfData
-	})
+	}, nil)
 	filter := stream.NewFilter(source, func(val int) bool {
 		for _, factor := range smallPrimes {
 			if val%factor == 0 {
@@ -321,4 +321,8 @@ func (ps *PrimeSource) Pull(blocks stream.BlockingType) (*int, error) {
 	ps.newPrimes = append(ps.newPrimes, potentialPrime)
 
 	return &potentialPrime, nil
+}
+
+// Close tells the source no more data will be Pull()ed.
+func (ps *PrimeSource) Close() {
 }

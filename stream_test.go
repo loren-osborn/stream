@@ -240,7 +240,7 @@ func TestSinkErrorHandling(t *testing.T) {
 				}
 
 				return nil, testCase.First.sourceError
-			})
+			}, nil)
 
 			val, err := testCase.Second.generator(source)
 
@@ -376,7 +376,7 @@ func TestTransformerErrorHandling(t *testing.T) {
 				}
 
 				return nil, testCase.First.sourceError
-			})
+			}, nil)
 
 			puller := testCase.Second.generator(source, testCase.First.block)
 
