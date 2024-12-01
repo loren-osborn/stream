@@ -209,7 +209,7 @@ func findNonDivisibleNumbers(smallPrimes []int, sieveSize int) []int {
 		}
 
 		return nil, stream.ErrEndOfData
-	}, nil)
+	}, func() {})
 	filter := stream.NewFilter(source, func(val int) bool {
 		for _, factor := range smallPrimes {
 			if val%factor == 0 {

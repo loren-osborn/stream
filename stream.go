@@ -85,7 +85,19 @@ type sourceFunc[T any] struct {
 
 // Pull proxies the call to the source lambda.
 func (sf *sourceFunc[T]) Pull(blocks BlockingType) (*T, error) {
-	return sf.srcFunc(blocks)
+	var val *T
+
+	err := ErrEndOfData
+
+	if sf.srcFunc != nil {
+		val, err = sf.srcFunc(blocks)
+	}
+
+	if errors.Is(err, ErrEndOfData) {
+		sf.Close()
+	}
+
+	return val, err
 }
 
 // Close tells the source no more data will be Pull()ed.
@@ -93,6 +105,9 @@ func (sf *sourceFunc[T]) Close() {
 	if sf.closeFunc != nil {
 		sf.closeFunc()
 	}
+
+	sf.srcFunc = nil
+	sf.closeFunc = nil
 }
 
 // SourceFunc lets a lambda become a source.
@@ -174,12 +189,22 @@ func NewMapper[TIn, TOut any](input Source[TIn], mapFn func(TIn) TOut) *Mapper[T
 
 // Pull transforms the next input element using the mapping function.
 func (mt *Mapper[TIn, TOut]) Pull(block BlockingType) (*TOut, error) {
-	nextIn, err := mt.input.Pull(block)
+	var nextIn *TIn
+
+	err := ErrEndOfData
+
+	if mt.input != nil {
+		nextIn, err = mt.input.Pull(block)
+	}
+
 	if err != nil {
 		switch {
-		case errors.Is(err, ErrEndOfData) || ((block == NonBlocking) && errors.Is(err, ErrNoDataYet)):
-			//nolint:wrapcheck // Don't wrap sentinal errors.
-			return nil, err
+		case errors.Is(err, ErrEndOfData):
+			mt.Close()
+
+			return nil, ErrEndOfData
+		case (block == NonBlocking) && errors.Is(err, ErrNoDataYet):
+			return nil, ErrNoDataYet
 		case errors.Is(err, ErrNoDataYet):
 			return nil, fmt.Errorf("unexpected sentinel error: %w", err)
 		default:
@@ -194,7 +219,12 @@ func (mt *Mapper[TIn, TOut]) Pull(block BlockingType) (*TOut, error) {
 
 // Close tells the source no more data will be Pull()ed.
 func (mt *Mapper[TIn, TOut]) Close() {
-	mt.input.Close()
+	if mt.input != nil {
+		mt.input.Close()
+	}
+
+	mt.input = nil
+	mt.mapFn = nil
 }
 
 // Filter filters elements in a source based on a predicate.
@@ -211,12 +241,22 @@ func NewFilter[T any](input Source[T], predicate func(T) bool) *Filter[T] {
 // Pull emits the next element that satisfies the predicate.
 func (ft *Filter[T]) Pull(block BlockingType) (*T, error) {
 	for {
-		next, err := ft.input.Pull(block)
+		var next *T
+
+		err := ErrEndOfData
+
+		if ft.input != nil {
+			next, err = ft.input.Pull(block)
+		}
+
 		if err != nil {
 			switch {
-			case errors.Is(err, ErrEndOfData) || ((block == NonBlocking) && errors.Is(err, ErrNoDataYet)):
-				//nolint:wrapcheck // Don't wrap sentinal errors.
-				return nil, err
+			case errors.Is(err, ErrEndOfData):
+				ft.Close()
+
+				return nil, ErrEndOfData
+			case (block == NonBlocking) && errors.Is(err, ErrNoDataYet):
+				return nil, ErrNoDataYet
 			case errors.Is(err, ErrNoDataYet):
 				return nil, fmt.Errorf("unexpected sentinel error: %w", err)
 			default:
@@ -232,7 +272,12 @@ func (ft *Filter[T]) Pull(block BlockingType) (*T, error) {
 
 // Close tells the source no more data will be Pull()ed.
 func (ft *Filter[T]) Close() {
-	ft.input.Close()
+	if ft.input != nil {
+		ft.input.Close()
+	}
+
+	ft.input = nil
+	ft.predicate = nil
 }
 
 // Filter filters elements in a source based on a predicate.
@@ -248,12 +293,22 @@ func NewTaker[T any](input Source[T], elCount int) *Taker[T] {
 
 // Pull emits the next element that satisfies the predicate.
 func (tt *Taker[T]) Pull(block BlockingType) (*T, error) {
-	next, err := tt.input.Pull(block)
+	var next *T
+
+	err := ErrEndOfData
+
+	if tt.input != nil {
+		next, err = tt.input.Pull(block)
+	}
+
 	if err != nil {
 		switch {
-		case errors.Is(err, ErrEndOfData) || ((block == NonBlocking) && errors.Is(err, ErrNoDataYet)):
-			//nolint:wrapcheck // Don't wrap sentinal errors.
-			return nil, err
+		case errors.Is(err, ErrEndOfData):
+			tt.Close()
+
+			return nil, ErrEndOfData
+		case (block == NonBlocking) && errors.Is(err, ErrNoDataYet):
+			return nil, ErrNoDataYet
 		case errors.Is(err, ErrNoDataYet):
 			return nil, fmt.Errorf("unexpected sentinel error: %w", err)
 		default:
@@ -274,7 +329,11 @@ func (tt *Taker[T]) Pull(block BlockingType) (*T, error) {
 
 // Close tells the source no more data will be Pull()ed.
 func (tt *Taker[T]) Close() {
-	tt.input.Close()
+	if tt.input != nil {
+		tt.input.Close()
+	}
+
+	tt.input = nil
 }
 
 // NewDropper creates a new Taker that skips the first elCount elements.
@@ -300,7 +359,6 @@ type ReduceTransformer[TIn, TOut any] struct {
 	reducer     func([]TOut, TIn) ([]TOut, []TOut)
 	buffer      []TOut
 	accumulator []TOut
-	eod         error
 }
 
 // NewReduceTransformer creates a new ReduceTransformer.
@@ -313,7 +371,6 @@ func NewReduceTransformer[TIn, TOut any](
 		reducer:     reducer,
 		buffer:      nil,
 		accumulator: nil,
-		eod:         nil,
 	}
 }
 
@@ -326,15 +383,17 @@ func (rt *ReduceTransformer[TIn, TOut]) Pull(block BlockingType) (*TOut, error) 
 		return &out, nil
 	}
 
-	if rt.eod != nil {
-		return nil, rt.eod
+	if rt.input == nil {
+		rt.Close()
+
+		return nil, ErrEndOfData
 	}
 
 	next, err := rt.input.Pull(block)
 	if err != nil {
 		switch {
 		case errors.Is(err, ErrEndOfData):
-			rt.eod = err
+			rt.closeInput()
 			rt.buffer = rt.accumulator
 			rt.accumulator = nil
 
@@ -351,6 +410,24 @@ func (rt *ReduceTransformer[TIn, TOut]) Pull(block BlockingType) (*TOut, error) 
 	rt.buffer, rt.accumulator = rt.reducer(rt.accumulator, *next)
 
 	return rt.Pull(block)
+}
+
+// closeInput tells the source no more data will be Pull()ed but retains
+// the remaining buffer to spool to consumer.
+func (rt *ReduceTransformer[TIn, TOut]) closeInput() {
+	if rt.input != nil {
+		rt.input.Close()
+	}
+
+	rt.input = nil
+}
+
+// Close tells the source no more data will be Pull()ed.
+func (rt *ReduceTransformer[TIn, TOut]) Close() {
+	rt.closeInput()
+	rt.buffer = nil
+	rt.accumulator = nil
+	rt.reducer = nil
 }
 
 // Reducer consumes an entire input source and reduces it to a single output value.
