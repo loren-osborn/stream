@@ -355,6 +355,16 @@ func getTransformerIntOutputTestCase() []transformerOutputTestCase[int] {
 				}
 			},
 		},
+		{
+			name: "Spooler",
+			generator: func(src stream.Source[int], blk stream.BlockingType) func() (*int, error) {
+				spooler := stream.NewSpooler(src)
+
+				return func() (*int, error) {
+					return spooler.Pull(blk)
+				}
+			},
+		},
 	}
 }
 
