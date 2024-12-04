@@ -149,11 +149,32 @@ func TestRingBuffer_Range(t *testing.T) {
 
 	var result []string
 
-	ringBuf.Range(func(_ int, value string) bool {
+	mapCopy := ringBuf.ToMap()
+
+	itCount := 0
+
+	ringBuf.Range(func(idx int, value string) bool {
 		result = append(result, value)
+		itCount++
+
+		if mapVal, ok := mapCopy[idx]; !ok || mapVal != value {
+			if !ok {
+				t.Errorf("Expected map key %v, missing!", idx)
+			} else {
+				t.Errorf("Expected map[%v] == \"%v\", found \"%v\"", idx, value, mapVal)
+			}
+		}
 
 		return true
 	})
+
+	if mapLen := len(mapCopy); mapLen != ringBuf.Len() {
+		t.Errorf("Expected %d elements in mapCopy, found %d.", ringBuf.Len(), mapLen)
+	}
+
+	if itCount != ringBuf.Len() {
+		t.Errorf("Expected %d iterations, saw %d.", ringBuf.Len(), itCount)
+	}
 
 	expected := []string{"ten", "twenty", "thirty"}
 	if !reflect.DeepEqual(result, expected) {
