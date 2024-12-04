@@ -2,6 +2,7 @@ package ringbuffer_test
 
 import (
 	"reflect"
+	"sync"
 	"testing"
 
 	//nolint:depguard // package under test.
@@ -185,37 +186,77 @@ func TestRingBuffer_Range_EarlyExit(t *testing.T) {
 	}
 }
 
-// func TestRingBuffer_ConcurrentAccess(t *testing.T) {
-// 	rb := ringbuffer.NewRingBuffer
-// 	var wg sync.WaitGroup
+//nolint: funlen // *FIXME*
+func TestRingBuffer_ConcurrentAccess(t *testing.T) {
+	t.Parallel()
 
-// 	// Writer goroutine
-// 	wg.Add(1)
-// 	go func() {
-// 		defer wg.Done()
-// 		for i := 0; i < 1000; i++ {
-// 			rb.Append(i)
-// 		}
-// 	}()
+	ringBuf := ringbuffer.NewRingBuffer[int](0)
+	someFunc := func(in int) int { return in*3 + 7 }
 
-// 	// Reader goroutine
-// 	wg.Add(1)
-// 	go func() {
-// 		defer wg.Done()
-// 		var lastIndex int = -1
-// 		for i := 0; i < 1000; i++ {
-// 			rb.Range(func(index int, value int) bool {
-// 				if index <= lastIndex {
-// 					t.Errorf("Indices out of order: %d followed by %d", lastIndex, index)
-// 				}
-// 				lastIndex = index
-// 				return true
-// 			})
-// 		}
-// 	}()
+	var waitGrp sync.WaitGroup
 
-// 	wg.Wait()
-// }
+	// Writer goroutine
+	waitGrp.Add(1)
+
+	go func() {
+		defer waitGrp.Done()
+
+		dueToDiscard := 0
+		nextDiscardGroup := 1
+
+		for i := range 1000 {
+			for j := range 2 {
+				index := i*2 + j
+				writeIndex := ringBuf.Append(someFunc(index))
+
+				if writeIndex != index {
+					t.Errorf("Unexpected write index %d when %d expected", writeIndex, index)
+				}
+
+				if val := ringBuf.At(writeIndex); val != someFunc(index) {
+					t.Errorf("Unexpected value %d when %d expected", val, someFunc(index))
+				}
+			}
+
+			dueToDiscard++
+
+			if dueToDiscard >= nextDiscardGroup {
+				ringBuf.Discard(nextDiscardGroup)
+
+				dueToDiscard -= nextDiscardGroup
+
+				nextDiscardGroup++
+			}
+		}
+	}()
+
+	// Reader goroutine
+	waitGrp.Add(1)
+
+	go func() {
+		defer waitGrp.Done()
+
+		for range 1000 {
+			lastIndex := -1
+
+			ringBuf.Range(func(index int, readVal int) bool {
+				if index <= lastIndex {
+					t.Errorf("Indices out of order: %d followed by %d", lastIndex, index)
+				}
+
+				if computed := someFunc(index); readVal != computed {
+					t.Errorf("Unanticipated value: %d when %d expected", readVal, computed)
+				}
+
+				lastIndex = index
+
+				return true
+			})
+		}
+	}()
+
+	waitGrp.Wait()
+}
 
 // func TestRingBuffer_DiscardInvalidCount(t *testing.T) {
 // 	defer func() {
