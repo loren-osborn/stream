@@ -12,7 +12,7 @@ import (
 func TestRingBuffer_AppendAndRetrieve(t *testing.T) {
 	t.Parallel()
 
-	ringBuf := ringbuffer.NewRingBuffer[int](3)
+	ringBuf := ringbuffer.New[int](3)
 
 	if idx1 := ringBuf.Append(100); idx1 != 0 {
 		t.Errorf("Expected index 0, got %d", idx1)
@@ -42,7 +42,7 @@ func TestRingBuffer_AppendAndRetrieve(t *testing.T) {
 func TestRingBuffer_Discard(t *testing.T) {
 	t.Parallel()
 
-	ringBuf := ringbuffer.NewRingBuffer[int](0)
+	ringBuf := ringbuffer.New[int](0)
 	ringBuf.Append(10)
 	ringBuf.Append(20)
 	ringBuf.Append(30)
@@ -71,7 +71,7 @@ func TestRingBuffer_Discard(t *testing.T) {
 func TestRingBuffer_Resize(t *testing.T) {
 	t.Parallel()
 
-	ringBuf := ringbuffer.NewRingBuffer[int](3)
+	ringBuf := ringbuffer.New[int](3)
 
 	if ringBuf.Cap() != 3 {
 		t.Errorf("Expected capacity 3, got %d", ringBuf.Cap())
@@ -121,7 +121,7 @@ func TestRingBuffer_Resize(t *testing.T) {
 func TestRingBuffer_Empty(t *testing.T) {
 	t.Parallel()
 
-	ringBuf := ringbuffer.NewRingBuffer[uint](5)
+	ringBuf := ringbuffer.New[uint](5)
 
 	ringBuf.Append(1)
 	ringBuf.Append(2)
@@ -141,7 +141,7 @@ func TestRingBuffer_Empty(t *testing.T) {
 func TestRingBuffer_Range(t *testing.T) {
 	t.Parallel()
 
-	ringBuf := ringbuffer.NewRingBuffer[string](0)
+	ringBuf := ringbuffer.New[string](0)
 
 	ringBuf.Append("ten")
 	ringBuf.Append("twenty")
@@ -164,7 +164,7 @@ func TestRingBuffer_Range(t *testing.T) {
 func TestRingBuffer_Range_EarlyExit(t *testing.T) {
 	t.Parallel()
 
-	ringBuf := ringbuffer.NewRingBuffer[uint](0)
+	ringBuf := ringbuffer.New[uint](0)
 
 	ringBuf.Append(1)
 	ringBuf.Append(2)
@@ -190,7 +190,7 @@ func TestRingBuffer_Range_EarlyExit(t *testing.T) {
 func TestRingBuffer_ConcurrentAccess(t *testing.T) {
 	t.Parallel()
 
-	ringBuf := ringbuffer.NewRingBuffer[int](0)
+	ringBuf := ringbuffer.New[int](0)
 	someFunc := func(in int) int { return in*3 + 7 }
 
 	var waitGrp sync.WaitGroup
@@ -269,7 +269,7 @@ func TestRingBuffer_DiscardInvalidCount(t *testing.T) {
 		}
 	}()
 
-	rb := ringbuffer.NewRingBuffer[int](0)
+	rb := ringbuffer.New[int](0)
 	rb.Append(1)
 	rb.Discard(2) // Should panic because only one element exists
 }
@@ -286,7 +286,7 @@ func TestRingBuffer_ResizeInvalidCapacity(t *testing.T) {
 		}
 	}()
 
-	rb := ringbuffer.NewRingBuffer[int](0)
+	rb := ringbuffer.New[int](0)
 	rb.Append(1)
 	rb.Append(2)
 	rb.Resize(1) // Should panic because size is 2
@@ -295,7 +295,7 @@ func TestRingBuffer_ResizeInvalidCapacity(t *testing.T) {
 func TestRingBuffer_Range_PanicHandling(t *testing.T) {
 	t.Parallel()
 
-	ringBuf := ringbuffer.NewRingBuffer[int](1)
+	ringBuf := ringbuffer.New[int](1)
 
 	// Simulate a panic during iteration
 	ringBuf.Range(func(_ int, _ int) bool {
@@ -330,13 +330,13 @@ func TestRingBuffer_NegInitialSize_PanicHandling(t *testing.T) {
 		}
 	}()
 
-	ringbuffer.NewRingBuffer[int](-1)
+	ringbuffer.New[int](-1)
 }
 
 func TestRingBuffer_IndexBefore_PanicHandling(t *testing.T) {
 	t.Parallel()
 
-	ringBuf := ringbuffer.NewRingBuffer[int](0)
+	ringBuf := ringbuffer.New[int](0)
 
 	ringBuf.Append(10)
 	ringBuf.Append(20)
@@ -360,7 +360,7 @@ func TestRingBuffer_IndexBefore_PanicHandling(t *testing.T) {
 func TestRingBuffer_IndexAfter_PanicHandling(t *testing.T) {
 	t.Parallel()
 
-	ringBuf := ringbuffer.NewRingBuffer[int](0)
+	ringBuf := ringbuffer.New[int](0)
 
 	ringBuf.Append(10)
 	ringBuf.Append(20)

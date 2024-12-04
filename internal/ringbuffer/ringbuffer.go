@@ -5,8 +5,8 @@ import (
 	"sync"
 )
 
-// RingBuffer is a thread-safe, dynamically growing circular buffer with absolute indexing.
-type RingBuffer[T any] struct {
+// Buffer is a thread-safe, dynamically growing circular buffer with absolute indexing.
+type Buffer[T any] struct {
 	mu     sync.RWMutex
 	data   []T // Underlying slice to store elements
 	start  int // Index of the first valid element in data slice
@@ -14,7 +14,7 @@ type RingBuffer[T any] struct {
 	offset int // Absolute index of the first valid element
 }
 
-// NewRingBuffer creates a new RingBuffer with the specified initial capacity.
+// New creates a new Buffer with the specified initial capacity.
 //
 // Parameters:
 // - capacity: The initial capacity of the ring buffer.
@@ -23,13 +23,13 @@ type RingBuffer[T any] struct {
 // - If capacity is less than zero.
 //
 // Returns:
-// - A pointer to the newly created RingBuffer.
-func NewRingBuffer[T any](capacity int) *RingBuffer[T] {
+// - A pointer to the newly created Buffer.
+func New[T any](capacity int) *Buffer[T] {
 	if capacity < 0 {
 		panic("capacity must be greater than zero")
 	}
 
-	result := &RingBuffer[T]{
+	result := &Buffer[T]{
 		mu:     sync.RWMutex{},
 		data:   nil,
 		start:  0,
@@ -52,7 +52,7 @@ func NewRingBuffer[T any](capacity int) *RingBuffer[T] {
 //
 // Returns:
 // - The absolute index of the appended element.
-func (rb *RingBuffer[T]) Append(value T) int {
+func (rb *Buffer[T]) Append(value T) int {
 	rb.mu.Lock()
 	defer rb.mu.Unlock()
 
@@ -69,7 +69,7 @@ func (rb *RingBuffer[T]) Append(value T) int {
 
 // Empty resets the ring buffer to its initial state, except it retains
 // its capacity.
-func (rb *RingBuffer[T]) Empty() {
+func (rb *Buffer[T]) Empty() {
 	rb.mu.Lock()
 	defer rb.mu.Unlock()
 
@@ -85,7 +85,7 @@ func (rb *RingBuffer[T]) Empty() {
 //
 // Panics:
 // - If more elements than Len().
-func (rb *RingBuffer[T]) Discard(count int) {
+func (rb *Buffer[T]) Discard(count int) {
 	rb.mu.Lock()
 	defer rb.mu.Unlock()
 
@@ -110,7 +110,7 @@ func (rb *RingBuffer[T]) Discard(count int) {
 // Thread Safety:
 // - The method is thread-safe. It locks the buffer only to extract a consistent snapshot of the buffer's state.
 // - The iteration itself is performed outside the lock, allowing other operations to proceed concurrently.
-func (rb *RingBuffer[T]) Range(yeildFunc func(index int, value T) bool) {
+func (rb *Buffer[T]) Range(yeildFunc func(index int, value T) bool) {
 	var data []T
 
 	var startIndex int
@@ -126,7 +126,7 @@ func (rb *RingBuffer[T]) Range(yeildFunc func(index int, value T) bool) {
 	rb.internalRange(yeildFunc, data, startIndex)
 }
 
-func (rb *RingBuffer[T]) internalRange(yeildFunc func(index int, value T) bool, data []T, startIndex int) {
+func (rb *Buffer[T]) internalRange(yeildFunc func(index int, value T) bool, data []T, startIndex int) {
 	// Iterate over the copied data outside the lock
 	for i, value := range data {
 		absIndex := startIndex + i
@@ -136,15 +136,15 @@ func (rb *RingBuffer[T]) internalRange(yeildFunc func(index int, value T) bool, 
 	}
 }
 
-// ToSlice converts the RingBuffer to a linear slice.
-func (rb *RingBuffer[T]) ToSlice() []T {
+// ToSlice converts the Buffer to a linear slice.
+func (rb *Buffer[T]) ToSlice() []T {
 	rb.mu.RLock()
 	defer rb.mu.RUnlock()
 
 	return rb.internalToSlice()
 }
 
-func (rb *RingBuffer[T]) internalToSlice() []T {
+func (rb *Buffer[T]) internalToSlice() []T {
 	result := make([]T, rb.size)
 
 	for i := rb.offset; i < (rb.offset + rb.size); i++ {
@@ -158,7 +158,7 @@ func (rb *RingBuffer[T]) internalToSlice() []T {
 //
 // Parameters:
 //   - newLen: The new number of elements in the ring buffer.
-func (rb *RingBuffer[T]) Resize(newLen int) {
+func (rb *Buffer[T]) Resize(newLen int) {
 	rb.mu.Lock()
 	defer rb.mu.Unlock()
 
@@ -166,7 +166,7 @@ func (rb *RingBuffer[T]) Resize(newLen int) {
 }
 
 // expand doubles the capacity of the buffer.
-func (rb *RingBuffer[T]) expand() {
+func (rb *Buffer[T]) expand() {
 	newCapacity := len(rb.data) << 1
 	if newCapacity == 0 {
 		newCapacity = 4 // not too tiny!
@@ -175,12 +175,12 @@ func (rb *RingBuffer[T]) expand() {
 	rb.internalResize(newCapacity)
 }
 
-func (rb *RingBuffer[T]) internalResize(newLen int) {
+func (rb *Buffer[T]) internalResize(newLen int) {
 	if newLen < rb.size {
 		panic(fmt.Sprintf("Attempted to resize to %d elements (not big enough to hold %d elements)", newLen, rb.size))
 	}
 
-	tempNewMe := RingBuffer[T]{
+	tempNewMe := Buffer[T]{
 		mu:     sync.RWMutex{},
 		data:   make([]T, newLen),
 		start:  0,
@@ -199,7 +199,7 @@ func (rb *RingBuffer[T]) internalResize(newLen int) {
 }
 
 // RangeFirst is the index of the first element in the ring buffer.
-func (rb *RingBuffer[T]) RangeFirst() int {
+func (rb *Buffer[T]) RangeFirst() int {
 	rb.mu.RLock()
 	defer rb.mu.RUnlock()
 
@@ -207,7 +207,7 @@ func (rb *RingBuffer[T]) RangeFirst() int {
 }
 
 // RangeLen is the index after the last element in the ring buffer.
-func (rb *RingBuffer[T]) RangeLen() int {
+func (rb *Buffer[T]) RangeLen() int {
 	rb.mu.RLock()
 	defer rb.mu.RUnlock()
 
@@ -215,7 +215,7 @@ func (rb *RingBuffer[T]) RangeLen() int {
 }
 
 // Len is the actual number of elements in the ring buffer.
-func (rb *RingBuffer[T]) Len() int {
+func (rb *Buffer[T]) Len() int {
 	rb.mu.RLock()
 	defer rb.mu.RUnlock()
 
@@ -223,7 +223,7 @@ func (rb *RingBuffer[T]) Len() int {
 }
 
 // Cap is the capacity of the ring buffer.
-func (rb *RingBuffer[T]) Cap() int {
+func (rb *Buffer[T]) Cap() int {
 	rb.mu.RLock()
 	defer rb.mu.RUnlock()
 
@@ -231,7 +231,7 @@ func (rb *RingBuffer[T]) Cap() int {
 }
 
 // Set sets the value of the ring buffer at a given index.
-func (rb *RingBuffer[T]) Set(index int, value T) {
+func (rb *Buffer[T]) Set(index int, value T) {
 	rb.mu.Lock()
 	defer rb.mu.Unlock()
 	nativeIdx := rb.toNativeIndex(index)
@@ -239,7 +239,7 @@ func (rb *RingBuffer[T]) Set(index int, value T) {
 }
 
 // At gets the value of the ring buffer at a given index.
-func (rb *RingBuffer[T]) At(index int) T {
+func (rb *Buffer[T]) At(index int) T {
 	rb.mu.RLock()
 	defer rb.mu.RUnlock()
 	nativeIdx := rb.toNativeIndex(index)
@@ -249,7 +249,7 @@ func (rb *RingBuffer[T]) At(index int) T {
 
 // toNativeIndex converts an external (absolute) index to an internal
 // native one.
-func (rb *RingBuffer[T]) toNativeIndex(absIdx int) int {
+func (rb *Buffer[T]) toNativeIndex(absIdx int) int {
 	if absIdx < rb.offset {
 		panic(fmt.Sprintf("Attempted to access index %d before initial index %d", absIdx, rb.offset))
 	}
@@ -263,7 +263,7 @@ func (rb *RingBuffer[T]) toNativeIndex(absIdx int) int {
 
 // // toAbsIndex converts an external (absolute) index to an internal
 // // native one.
-// func (rb *RingBuffer[T]) toAbsIndex(nativeIdx int) int {
+// func (rb *Buffer[T]) toAbsIndex(nativeIdx int) int {
 // 	unwrappedIdx := nativeIdx
 // 	if unwrappedIdx < rb.start {
 // 		unwrappedIdx += len(rb.data)
