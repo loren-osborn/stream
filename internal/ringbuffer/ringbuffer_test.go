@@ -117,39 +117,48 @@ func TestRingBuffer_Resize(t *testing.T) {
 	}
 }
 
-// func TestRingBuffer_Empty(t *testing.T) {
-// 	rb := ringbuffer.NewRingBuffer
-// 	rb.Append(1)
-// 	rb.Append(2)
-// 	rb.Append(3)
+func TestRingBuffer_Empty(t *testing.T) {
+	t.Parallel()
 
-// 	rb.Empty()
-// 	if len(rb.toSlice()) != 0 {
-// 		t.Errorf("Expected empty buffer, got %v", rb.toSlice())
-// 	}
+	ringBuf := ringbuffer.NewRingBuffer[uint](5)
 
-// 	if rb.Cap() != 5 {
-// 		t.Errorf("Expected capacity 5, got %d", rb.Cap())
-// 	}
-// }
+	ringBuf.Append(1)
+	ringBuf.Append(2)
+	ringBuf.Append(3)
 
-// func TestRingBuffer_Range(t *testing.T) {
-// 	rb := ringbuffer.NewRingBuffer
-// 	rb.Append(10)
-// 	rb.Append(20)
-// 	rb.Append(30)
+	ringBuf.Empty()
 
-// 	var result []int
-// 	rb.Range(func(index int, value int) bool {
-// 		result = append(result, value)
-// 		return true
-// 	})
+	if len(ringBuf.ToSlice()) != 0 {
+		t.Errorf("Expected empty buffer, got %v", ringBuf.ToSlice())
+	}
 
-// 	expected := []int{10, 20, 30}
-// 	if !reflect.DeepEqual(result, expected) {
-// 		t.Errorf("Expected %v, got %v", expected, result)
-// 	}
-// }
+	if ringBuf.Cap() != 5 {
+		t.Errorf("Expected capacity 5, got %d", ringBuf.Cap())
+	}
+}
+
+func TestRingBuffer_Range(t *testing.T) {
+	t.Parallel()
+
+	ringBuf := ringbuffer.NewRingBuffer[string](0)
+
+	ringBuf.Append("ten")
+	ringBuf.Append("twenty")
+	ringBuf.Append("thirty")
+
+	var result []string
+
+	ringBuf.Range(func(_ int, value string) bool {
+		result = append(result, value)
+
+		return true
+	})
+
+	expected := []string{"ten", "twenty", "thirty"}
+	if !reflect.DeepEqual(result, expected) {
+		t.Errorf("Expected %v, got %v", expected, result)
+	}
+}
 
 // func TestRingBuffer_Range_EarlyExit(t *testing.T) {
 // 	rb := ringbuffer.NewRingBuffer

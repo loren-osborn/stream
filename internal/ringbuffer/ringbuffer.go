@@ -67,6 +67,17 @@ func (rb *RingBuffer[T]) Append(value T) int {
 	return rb.offset + rb.size - 1
 }
 
+// Empty resets the ring buffer to its initial state, except it retains
+// its capacity.
+func (rb *RingBuffer[T]) Empty() {
+	rb.mu.Lock()
+	defer rb.mu.Unlock()
+
+	rb.start = 0
+	rb.offset = 0
+	rb.size = 0
+}
+
 // Discard removes elements from the start of the buffer.
 //
 // Parameters:
