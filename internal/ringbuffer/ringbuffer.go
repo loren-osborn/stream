@@ -95,7 +95,7 @@ func (rb *Buffer[T]) Discard(count int) {
 
 	rb.size -= count
 	rb.offset += count
-	rb.start += count
+	rb.start = (rb.start + count) % len(rb.data)
 }
 
 // Range calls the provided function for each element in the buffer, providing the index and value.
@@ -260,35 +260,3 @@ func (rb *Buffer[T]) toNativeIndex(absIdx int) int {
 
 	return (absIdx + rb.start - rb.offset) % len(rb.data)
 }
-
-// // toAbsIndex converts an external (absolute) index to an internal
-// // native one.
-// func (rb *Buffer[T]) toAbsIndex(nativeIdx int) int {
-// 	unwrappedIdx := nativeIdx
-// 	if unwrappedIdx < rb.start {
-// 		unwrappedIdx += len(rb.data)
-// 	}
-// 	absIdx := (unwrappedIdx + rb.offset - rb.start)
-// 	if (absIdx < rb.offset) || (absIdx >= (rb.offset + rb.size)) {
-// 		panic(fmt.Sprintf(
-// 			"Internal index %d maps to absolute index %s which is outside the element range %d to %d",
-// 			nativeIdx,
-// 			absIdx,
-// 			rb.offset,
-// 			(rb.offset + rb.size - 1),
-// 		))
-// 	}
-// 	if convertedNativeIdx := rb.toNativeIndex(absIdx); nativeIdx != convertedNativeIdx {
-// 		panic(fmt.Sprintf(
-// 			"INTERNAL LOGIC ERROR: Internal index %d converted to %d which round trips to %d:\ncap%d/len%d/off%d/start%d",
-// 			nativeIdx,
-// 			absIdx,
-// 			convertedNativeIdx,
-// 			len(rb.data),
-// 			rb.size,
-// 			rb.offset,
-// 			rb.start,
-// 		))
-// 	}
-// 	return absIdx
-// }
