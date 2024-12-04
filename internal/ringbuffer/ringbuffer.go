@@ -177,7 +177,7 @@ func (rb *RingBuffer[T]) expand() {
 
 func (rb *RingBuffer[T]) internalResize(newLen int) {
 	if newLen < rb.size {
-		panic(fmt.Sprintf("Attempted to resize to %d elements to hold %d elements", newLen, rb.size))
+		panic(fmt.Sprintf("Attempted to resize to %d elements (not big enough to hold %d elements)", newLen, rb.size))
 	}
 
 	tempNewMe := RingBuffer[T]{

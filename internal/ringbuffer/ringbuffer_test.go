@@ -258,44 +258,130 @@ func TestRingBuffer_ConcurrentAccess(t *testing.T) {
 	waitGrp.Wait()
 }
 
-// func TestRingBuffer_DiscardInvalidCount(t *testing.T) {
-// 	defer func() {
-// 		if r := recover(); r == nil {
-// 			t.Errorf("Expected panic, got none")
-// 		}
-// 	}()
+func TestRingBuffer_DiscardInvalidCount(t *testing.T) {
+	t.Parallel()
 
-// 	rb := ringbuffer.NewRingBuffer
-// 	rb.Append(1)
-// 	rb.Discard(2) // Should panic because only one element exists
-// }
+	defer func() {
+		if r := recover(); r == nil {
+			t.Errorf("Expected panic, got none")
+		} else if r != "Attempted to remove 2 elements when only 1 present" {
+			t.Errorf("Got panic \"%v\" when \"Attempted to remove 2 elements when only 1 present\" expected", r)
+		}
+	}()
 
-// func TestRingBuffer_ResizeInvalidCapacity(t *testing.T) {
-// 	defer func() {
-// 		if r := recover(); r == nil {
-// 			t.Errorf("Expected panic, got none")
-// 		}
-// 	}()
+	rb := ringbuffer.NewRingBuffer[int](0)
+	rb.Append(1)
+	rb.Discard(2) // Should panic because only one element exists
+}
 
-// 	rb := ringbuffer.NewRingBuffer
-// 	rb.Append(1)
-// 	rb.Append(2)
-// 	rb.Resize(1) // Should panic because size is 2
-// }
+func TestRingBuffer_ResizeInvalidCapacity(t *testing.T) {
+	t.Parallel()
 
-// func TestRingBuffer_Range_PanicHandling(t *testing.T) {
-//     rb := ringbuffer.NewRingBufferpend(1)
-//     rb.Append(2)
-//     rb.Append(3)
+	defer func() {
+		if r := recover(); r == nil {
+			t.Errorf("Expected panic, got none")
+		} else if r != "Attempted to resize to 1 elements (not big enough to hold 2 elements)" {
+			t.Errorf("Got panic \"%v\" when \"Attempted to resize to 1 elements (not big enough "+
+				"to hold 2 elements)\" expected", r)
+		}
+	}()
 
-//     defer func() {
-//         if r := recover(); r == nil {
-//             t.Errorf("Expected panic, but no panic occurred")
-//         }
-//     }()
+	rb := ringbuffer.NewRingBuffer[int](0)
+	rb.Append(1)
+	rb.Append(2)
+	rb.Resize(1) // Should panic because size is 2
+}
 
-//     // Simulate a panic during iteration
-//     rb.Range(func(index int, value int) bool {
-//         panic("simulated panic")
-//     })
-// }
+func TestRingBuffer_Range_PanicHandling(t *testing.T) {
+	t.Parallel()
+
+	ringBuf := ringbuffer.NewRingBuffer[int](1)
+
+	// Simulate a panic during iteration
+	ringBuf.Range(func(_ int, _ int) bool {
+		panic("empty buffer... no iterations... no panic!")
+	})
+
+	ringBuf.Append(2)
+	ringBuf.Append(3)
+
+	defer func() {
+		if r := recover(); r == nil {
+			t.Errorf("Expected panic, but no panic occurred")
+		} else if r != "simulated panic" {
+			t.Errorf("Got panic \"%v\" when \"simulated panic\" expected", r)
+		}
+	}()
+
+	// Simulate a panic during iteration
+	ringBuf.Range(func(_ int, _ int) bool {
+		panic("simulated panic")
+	})
+}
+
+func TestRingBuffer_NegInitialSize_PanicHandling(t *testing.T) {
+	t.Parallel()
+
+	defer func() {
+		if r := recover(); r == nil {
+			t.Errorf("Expected panic, but no panic occurred")
+		} else if r != "capacity must be greater than zero" {
+			t.Errorf("Got panic \"%v\" when \"capacity must be greater than zero\" expected", r)
+		}
+	}()
+
+	ringbuffer.NewRingBuffer[int](-1)
+}
+
+func TestRingBuffer_IndexBefore_PanicHandling(t *testing.T) {
+	t.Parallel()
+
+	ringBuf := ringbuffer.NewRingBuffer[int](0)
+
+	ringBuf.Append(10)
+	ringBuf.Append(20)
+	ringBuf.Append(30)
+	ringBuf.Append(40)
+	ringBuf.Append(50)
+	ringBuf.Discard(2)
+
+	defer func() {
+		if r := recover(); r == nil {
+			t.Errorf("Expected panic, but no panic occurred")
+		} else if r != "Attempted to access index 1 before initial index 2" {
+			t.Errorf("Got panic \"%v\" when \"Attempted to access index 1 before initial index 2\" expected", r)
+		}
+	}()
+
+	// Panic attempting to set discarded element
+	ringBuf.Set(1, 200)
+}
+
+func TestRingBuffer_IndexAfter_PanicHandling(t *testing.T) {
+	t.Parallel()
+
+	ringBuf := ringbuffer.NewRingBuffer[int](0)
+
+	ringBuf.Append(10)
+	ringBuf.Append(20)
+	ringBuf.Append(30)
+	ringBuf.Append(40)
+	ringBuf.Append(50)
+	ringBuf.Discard(2)
+
+	rangeLen := ringBuf.RangeLen()
+	if rangeLen != 5 {
+		t.Errorf("Exprected RangeLen() == 5 got %d", rangeLen)
+	}
+
+	defer func() {
+		if r := recover(); r == nil {
+			t.Errorf("Expected panic, but no panic occurred")
+		} else if r != "Attempted to access index 5 after final index 4" {
+			t.Errorf("Got panic \"%v\" when \"Attempted to access index 5 after final index 4\" expected", r)
+		}
+	}()
+
+	// Panic attempting to set discarded element
+	ringBuf.Set(rangeLen, 60)
+}
