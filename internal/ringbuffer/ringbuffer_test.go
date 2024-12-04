@@ -160,25 +160,30 @@ func TestRingBuffer_Range(t *testing.T) {
 	}
 }
 
-// func TestRingBuffer_Range_EarlyExit(t *testing.T) {
-// 	rb := ringbuffer.NewRingBuffer
-// 	rb.Append(1)
-// 	rb.Append(2)
-// 	rb.Append(3)
-// 	rb.Append(4)
-// 	rb.Append(5)
+func TestRingBuffer_Range_EarlyExit(t *testing.T) {
+	t.Parallel()
 
-// 	var result []int
-// 	rb.Range(func(index int, value int) bool {
-// 		result = append(result, value)
-// 		return value < 3 // Stop after value 3
-// 	})
+	ringBuf := ringbuffer.NewRingBuffer[uint](0)
 
-// 	expected := []int{1, 2, 3}
-// 	if !reflect.DeepEqual(result, expected) {
-// 		t.Errorf("Expected %v, got %v", expected, result)
-// 	}
-// }
+	ringBuf.Append(1)
+	ringBuf.Append(2)
+	ringBuf.Append(3)
+	ringBuf.Append(4)
+	ringBuf.Append(5)
+
+	var result []uint
+
+	ringBuf.Range(func(_ int, value uint) bool {
+		result = append(result, value)
+
+		return value < 3 // Stop after value 3
+	})
+
+	expected := []uint{1, 2, 3}
+	if !reflect.DeepEqual(result, expected) {
+		t.Errorf("Expected %v, got %v", expected, result)
+	}
+}
 
 // func TestRingBuffer_ConcurrentAccess(t *testing.T) {
 // 	rb := ringbuffer.NewRingBuffer
