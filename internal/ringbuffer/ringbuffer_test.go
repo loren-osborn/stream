@@ -67,28 +67,55 @@ func TestRingBuffer_Discard(t *testing.T) {
 	}
 }
 
-// func TestRingBuffer_Resize(t *testing.T) {
-// 	rb := ringbuffer.NewRingBuffer
-// 	rb.Append(1)
-// 	rb.Append(2)
-// 	rb.Append(3)
+func TestRingBuffer_Resize(t *testing.T) {
+	t.Parallel()
 
-// 	rb.Resize(10)
-// 	if rb.Capacity() != 10 {
-// 		t.Errorf("Expected capacity 10, got %d", rb.Capacity())
-// 	}
+	ringBuf := ringbuffer.NewRingBuffer[int](3)
 
-// 	expected := []int{1, 2, 3}
-// 	var result []int
-// 	rb.Range(func(index int, value int) bool {
-// 		result = append(result, value)
-// 		return true
-// 	})
+	if ringBuf.Cap() != 3 {
+		t.Errorf("Expected capacity 3, got %d", ringBuf.Cap())
+	}
 
-// 	if !reflect.DeepEqual(result, expected) {
-// 		t.Errorf("Expected %v, got %v", expected, result)
-// 	}
-// }
+	if ringBuf.Len() != 0 {
+		t.Errorf("Expected length 0, got %d", ringBuf.Len())
+	}
+
+	ringBuf.Append(1)
+	ringBuf.Append(2)
+	ringBuf.Append(3)
+
+	if ringBuf.Cap() != 3 {
+		t.Errorf("Expected capacity 3, got %d", ringBuf.Cap())
+	}
+
+	if ringBuf.Len() != 3 {
+		t.Errorf("Expected length 3, got %d", ringBuf.Len())
+	}
+
+	ringBuf.Resize(10)
+
+	if ringBuf.Cap() != 10 {
+		t.Errorf("Expected capacity 10, got %d", ringBuf.Cap())
+	}
+
+	if ringBuf.Len() != 3 {
+		t.Errorf("Expected length 3, got %d", ringBuf.Len())
+	}
+
+	expected := []int{1, 2, 3}
+
+	var result []int
+
+	ringBuf.Range(func(_ int, value int) bool {
+		result = append(result, value)
+
+		return true
+	})
+
+	if !reflect.DeepEqual(result, expected) {
+		t.Errorf("Expected %v, got %v", expected, result)
+	}
+}
 
 // func TestRingBuffer_Empty(t *testing.T) {
 // 	rb := ringbuffer.NewRingBuffer
@@ -101,8 +128,8 @@ func TestRingBuffer_Discard(t *testing.T) {
 // 		t.Errorf("Expected empty buffer, got %v", rb.toSlice())
 // 	}
 
-// 	if rb.Capacity() != 5 {
-// 		t.Errorf("Expected capacity 5, got %d", rb.Capacity())
+// 	if rb.Cap() != 5 {
+// 		t.Errorf("Expected capacity 5, got %d", rb.Cap())
 // 	}
 // }
 

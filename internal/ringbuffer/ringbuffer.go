@@ -24,27 +24,24 @@ type RingBuffer[T any] struct {
 //
 // Returns:
 // - A pointer to the newly created RingBuffer.
-//
-//	func NewRingBuffer[T any](capacity int) *RingBuffer[T] {
-//		if capacity < 0 {
-//		    panic("capacity must be greater than zero")
-//		}
-//		result := &RingBuffer[T]{
-//			data: nil,
-//		}
-//		if capacity > 0 {
-//		    result.data = make([]T, capacity)
-//		}
-//		return result
-//	}
-func NewRingBuffer[T any](_ int) *RingBuffer[T] {
-	return &RingBuffer[T]{
+func NewRingBuffer[T any](capacity int) *RingBuffer[T] {
+	if capacity < 0 {
+		panic("capacity must be greater than zero")
+	}
+
+	result := &RingBuffer[T]{
 		mu:     sync.RWMutex{},
 		data:   nil,
 		start:  0,
 		size:   0,
 		offset: 0,
 	}
+
+	if capacity > 0 {
+		result.data = make([]T, capacity)
+	}
+
+	return result
 }
 
 // Append adds a new element to the end of the buffer.
@@ -146,6 +143,17 @@ func (rb *RingBuffer[T]) internalToSlice() []T {
 	return result
 }
 
+// Resize adjusts the capacity of the buffer.
+//
+// Parameters:
+//   - newLen: The new number of elements in the ring buffer.
+func (rb *RingBuffer[T]) Resize(newLen int) {
+	rb.mu.Lock()
+	defer rb.mu.Unlock()
+
+	rb.internalResize(newLen)
+}
+
 // expand doubles the capacity of the buffer.
 func (rb *RingBuffer[T]) expand() {
 	newCapacity := len(rb.data) << 1
@@ -153,10 +161,18 @@ func (rb *RingBuffer[T]) expand() {
 		newCapacity = 4 // not too tiny!
 	}
 
+	rb.internalResize(newCapacity)
+}
+
+func (rb *RingBuffer[T]) internalResize(newLen int) {
+	if newLen < rb.size {
+		panic(fmt.Sprintf("Attempted to resize to %d elements to hold %d elements", newLen, rb.size))
+	}
+
 	tempNewMe := RingBuffer[T]{
 		mu:     sync.RWMutex{},
-		data:   make([]T, newCapacity),
-		start:  rb.start,
+		data:   make([]T, newLen),
+		start:  0,
 		size:   rb.size,
 		offset: rb.offset,
 	}
@@ -168,6 +184,7 @@ func (rb *RingBuffer[T]) expand() {
 	}, rb.internalToSlice(), rb.offset)
 
 	rb.data = tempNewMe.data
+	rb.start = 0
 }
 
 // RangeFirst is the index of the first element in the ring buffer.
