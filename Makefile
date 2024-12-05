@@ -47,6 +47,7 @@ coverage.out: $(shell find $(NON_EMPTY_GO_PACKAGES) -type f -name '*.go' | sed -
 
 # Lint the code
 lint:
+	revive ./...
 	golangci-lint run
 
 # Format the code

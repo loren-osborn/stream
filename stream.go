@@ -58,8 +58,12 @@ import (
 type BlockingType bool
 
 const (
+	// NonBlocking indicates that the Pull operation should return immediately
+	// if no data is available.
 	NonBlocking BlockingType = false
-	Blocking    BlockingType = true
+
+	// Blocking indicates that the Pull operation should wait until data is available.
+	Blocking BlockingType = true
 )
 
 // ErrEndOfData is returned by Pull when the source has no more data to produce.
@@ -157,7 +161,18 @@ func NewSliceSink[T any](dest *[]T) *SliceSink[T] {
 	return &SliceSink[T]{dest: dest}
 }
 
-// Reduce processes all elements from the input producer and returns the final reduced value.
+// Append pulls all elements from the given source and appends them to the slice.
+//
+// Parameters:
+// - input: The source from which elements are pulled.
+//
+// Returns:
+// - A pointer to the resulting slice containing all pulled elements.
+// - An error if the operation encounters unexpected errors.
+//
+// Notes:
+// - The method processes all available elements in the source.
+// - It stops when the source is exhausted, returning `ErrEndOfData`.
 func (ss *SliceSink[T]) Append(input Source[T]) (*[]T, error) {
 	for {
 		next, err := input.Pull(Blocking)
@@ -280,7 +295,10 @@ func (ft *Filter[T]) Close() {
 	ft.predicate = nil
 }
 
-// Filter filters elements in a source based on a predicate.
+// Taker limits the number of elements returned from a source.
+//
+// Taker provides a way to process only the first `n` elements of a stream,
+// discarding the rest.
 type Taker[T any] struct {
 	input Source[T]
 	left  int

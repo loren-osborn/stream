@@ -1,5 +1,7 @@
-// fork.go implements fork and related features like spool and partition
+// Package stream provides tools for lazy evaluation and data transformation pipelines.
 package stream
+
+// This file implements fork and related features like spool and partition.
 
 import (
 	"errors"
@@ -7,13 +9,34 @@ import (
 	"slices"
 )
 
-// Spool allows buffering of elements that arrive early.
+// Spooler provides buffering for elements that arrive early from a data source.
+// It allows buffering (via Stuff) and consumption (via Pull) of elements sequentially.
+//
+// Type Parameter:
+// - T: The type of elements buffered and consumed.
 type Spooler[T any] struct {
 	input  Source[T]
 	buffer []T
 }
 
-// Pull proxies the call to the source lambda.
+// Pull retrieves the next item from the Spooler.
+// If buffered elements exist, the next buffered item is returned. Otherwise,
+// it pulls data from the source.
+//
+// Parameters:
+// - block: Specifies whether the operation should block if no data is available.
+//
+// Returns:
+// - A pointer to the next element (if available).
+// - An error, which can include:
+//   - ErrEndOfData: No more data is available from the source.
+//   - ErrNoDataYet: No data is available yet, but the source may provide more later
+//     (only if block is NonBlocking).
+//   - Other errors related to the source data retrieval.
+//
+// Notes:
+//   - If the source is exhausted (returns ErrEndOfData), the Spooler will close
+//     the source and retain any buffered elements for further consumption.
 func (s *Spooler[T]) Pull(block BlockingType) (*T, error) {
 	if len(s.buffer) > 0 {
 		out := s.buffer[0]
@@ -47,7 +70,14 @@ func (s *Spooler[T]) Pull(block BlockingType) (*T, error) {
 	return next, nil
 }
 
-// Stuff buffers the next items due to be Pull()ed.
+// Stuff appends elements to the Spooler’s internal buffer for later retrieval.
+//
+// Parameters:
+// - items: The elements to buffer.
+//
+// Notes:
+//   - If the buffer capacity is insufficient, it will be grown to accommodate
+//     the additional items, with extra capacity for future growth.
 func (s *Spooler[T]) Stuff(items []T) {
 	reqdCap := (len(s.buffer) + len(items))
 	if cap(s.buffer) < reqdCap {
@@ -58,8 +88,11 @@ func (s *Spooler[T]) Stuff(items []T) {
 	s.buffer = append(s.buffer, items...)
 }
 
-// closeInput tells the source no more data will be Pull()ed but retains
-// the remaining buffer to spool to consumer.
+// closeInput signals to the source that no more data will be pulled.
+// The Spooler retains any buffered elements for future consumption.
+//
+// Notes:
+// - This is an internal method and should not be called directly by external consumers.
 func (s *Spooler[T]) closeInput() {
 	if s.input != nil {
 		s.input.Close()
@@ -68,14 +101,26 @@ func (s *Spooler[T]) closeInput() {
 	s.input = nil
 }
 
-// Close tells the source no more data will be Pull()ed.
+// Close closes the Spooler and releases its resources.
+// It signals to the source that no more data will be pulled and clears
+// the internal buffer.
 func (s *Spooler[T]) Close() {
 	s.closeInput()
 
 	s.buffer = nil
 }
 
-// NewMapper creates a new Mapper.
+// NewSpooler creates and returns a new Spooler.
+//
+// Parameters:
+// - input: The data source to be spooled.
+//
+// Returns:
+// - A pointer to a new Spooler instance.
+//
+// Notes:
+//   - The input source may provide elements dynamically, which the Spooler
+//     buffers for sequential consumption.
 func NewSpooler[T any](input Source[T]) *Spooler[T] {
 	return &Spooler[T]{input: input, buffer: nil}
 }
