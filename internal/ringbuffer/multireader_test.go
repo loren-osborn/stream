@@ -181,30 +181,30 @@ func TestMultiReaderBuf_Discard(t *testing.T) {
 // 	}
 // }
 
-// func TestMultiReaderBuf_Range_EarlyExit(t *testing.T) {
-// 	t.Parallel()
+func TestMultiReaderBuf_Range_EarlyExit(t *testing.T) {
+	t.Parallel()
 
-// 	ringBuf := ringbuffer.New[uint](0)
+	ringBuf := ringbuffer.NewMultiReaderBuf[uint](0, 1)
 
-// 	ringBuf.Append(1)
-// 	ringBuf.Append(2)
-// 	ringBuf.Append(3)
-// 	ringBuf.Append(4)
-// 	ringBuf.Append(5)
+	ringBuf.Append(1)
+	ringBuf.Append(2)
+	ringBuf.Append(3)
+	ringBuf.Append(4)
+	ringBuf.Append(5)
 
-// 	var result []uint
+	var result []uint
 
-// 	ringBuf.Range(func(_ int, value uint) bool {
-// 		result = append(result, value)
+	ringBuf.ReaderRange(0, func(_ int, value uint) bool {
+		result = append(result, value)
 
-// 		return value < 3 // Stop after value 3
-// 	})
+		return value < 3 // Stop after value 3
+	})
 
-// 	expected := []uint{1, 2, 3}
-// 	if !reflect.DeepEqual(result, expected) {
-// 		t.Errorf("Expected %v, got %v", expected, result)
-// 	}
-// }
+	expected := []uint{1, 2, 3}
+	if !reflect.DeepEqual(result, expected) {
+		t.Errorf("Expected %v, got %v", expected, result)
+	}
+}
 
 // //nolint: funlen // *FIXME*
 // func TestMultiReaderBuf_ConcurrentAccess(t *testing.T) {
