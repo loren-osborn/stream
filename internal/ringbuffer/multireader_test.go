@@ -1,6 +1,7 @@
 package ringbuffer_test
 
 import (
+	"reflect"
 	"testing"
 
 	//nolint:depguard // package under test.
@@ -37,34 +38,34 @@ func TestMultiReaderBuf_AppendAndRetrieve(t *testing.T) {
 	}
 }
 
-// func TestMultiReaderBuf_Discard(t *testing.T) {
-// 	t.Parallel()
+func TestMultiReaderBuf_Discard(t *testing.T) {
+	t.Parallel()
 
-// 	ringBuf := ringbuffer.New[int](0)
-// 	ringBuf.Append(10)
-// 	ringBuf.Append(20)
-// 	ringBuf.Append(30)
+	ringBuf := ringbuffer.NewMultiReaderBuf[int](0, 1)
+	ringBuf.Append(10)
+	ringBuf.Append(20)
+	ringBuf.Append(30)
 
-// 	ringBuf.Discard(2)
+	ringBuf.ReaderDiscard(0, 2)
 
-// 	if ringBuf.RangeFirst() != 2 {
-// 		t.Errorf("Expected RangeFirst to be 2, got %d", ringBuf.RangeFirst())
-// 	}
+	if ringBuf.ReaderRangeFirst(0) != 2 {
+		t.Errorf("Expected RangeFirst to be 2, got %d", ringBuf.ReaderRangeFirst(0))
+	}
 
-// 	expected := []int{30}
+	expected := []int{30}
 
-// 	var result []int
+	var result []int
 
-// 	ringBuf.Range(func(_ int, value int) bool {
-// 		result = append(result, value)
+	ringBuf.ReaderRange(0, func(_ int, value int) bool {
+		result = append(result, value)
 
-// 		return true
-// 	})
+		return true
+	})
 
-// 	if !reflect.DeepEqual(result, expected) {
-// 		t.Errorf("Expected %v, got %v", expected, result)
-// 	}
-// }
+	if !reflect.DeepEqual(result, expected) {
+		t.Errorf("Expected %v, got %v", expected, result)
+	}
+}
 
 // func TestMultiReaderBuf_Resize(t *testing.T) {
 // 	t.Parallel()

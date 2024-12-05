@@ -1,6 +1,7 @@
 package ringbuffer
 
 import (
+	"fmt"
 	"sync"
 )
 
@@ -50,8 +51,45 @@ func (mrb *MultiReaderBuf[T]) Append(value T) int {
 // func (mrb *MultiReaderBuf[T]) ReaderPeekFirst(readerID int) (*T, error)
 // func (mrb *MultiReaderBuf[T]) ReaderConsumeFirst(readerID int) (*T, error)
 // func (mrb *MultiReaderBuf[T]) ReaderAt(readerID int, index int) T
-// func (mrb *MultiReaderBuf[T]) ReaderDiscard(readerID int, count int)
-// func (mrb *MultiReaderBuf[T]) ReaderRangeFirst(readerID int) int
+
+// ReaderDiscard discards a given number of elements for the POV of reader readerID.
+func (mrb *MultiReaderBuf[T]) ReaderDiscard(readerID int, count int) {
+	mrb.mu.Lock()
+	defer mrb.mu.Unlock()
+
+	if localSize := mrb.internalReaderLen(readerID); count > localSize {
+		panic(fmt.Sprintf("Attempted to remove %d elements when only %d visible", count, localSize))
+	}
+
+	prevMinIdx := mrb.readers[readerID].offset
+	newMinIdx := prevMinIdx + count
+
+	for ID, pReader := range mrb.readers {
+		if (ID != readerID) && (mrb.readers[readerID] != nil) {
+			if prevMinIdx > pReader.offset {
+				prevMinIdx = pReader.offset
+			}
+
+			if newMinIdx > pReader.offset {
+				newMinIdx = pReader.offset
+			}
+		}
+	}
+
+	mrb.readers[readerID].offset += count
+	if newMinIdx > prevMinIdx {
+		mrb.data.Discard(newMinIdx - prevMinIdx)
+	}
+}
+
+// ReaderRangeFirst gives the index of the first element from the POV of reader readerID.
+func (mrb *MultiReaderBuf[T]) ReaderRangeFirst(readerID int) int {
+	mrb.mu.RLock()
+	defer mrb.mu.RUnlock()
+
+	return mrb.readers[readerID].offset
+}
+
 // func (mrb *MultiReaderBuf[T]) ReaderRangeLen(readerID int) int
 
 // ReaderRange ranges over the ring buffer from the POV of reader readerID.
@@ -92,6 +130,10 @@ func (mrb *MultiReaderBuf[T]) ReaderRange(readerID int, yeildFunc func(index int
 // func (r *Reader[T]) Len() int
 // func (r *Reader[T]) ToSlice() []T
 // func (r *Reader[T]) ToMap() map[int]T
+
+func (mrb *MultiReaderBuf[T]) internalReaderLen(readerID int) int {
+	return mrb.data.RangeLen() - mrb.readers[readerID].offset
+}
 
 func (mrb *MultiReaderBuf[T]) internalReaderToSlice(readerID int) []T {
 	localOffset := mrb.readers[readerID].offset - mrb.data.RangeFirst()
