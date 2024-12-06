@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	//nolint:depguard // package under test.
-	"github.com/loren-osborn/stream/internal/ringbuffer"
+	"github.com/loren-osborn/stream/ringbuffer"
 )
 
 func TestRingBuffer_AppendAndRetrieve(t *testing.T) {
