@@ -270,10 +270,6 @@ func (rb *Buffer[T]) ToSlice() []T {
 //
 // Returns:
 // - A map[int]T containing all elements in the buffer, keyed by their absolute indices.
-//
-// Notes:
-//   - The map is constructed as a snapshot, so concurrent modifications to the buffer during map creation
-//     will not affect the returned result.
 func (rb *Buffer[T]) ToMap() map[int]T {
 	rb.mu.RLock()
 	defer rb.mu.RUnlock()

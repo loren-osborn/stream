@@ -67,119 +67,200 @@ func TestMultiReaderBuf_Discard(t *testing.T) {
 	}
 }
 
-// func TestMultiReaderBuf_Resize(t *testing.T) {
-// 	t.Parallel()
+func TestMultiReaderBuf_Resize(t *testing.T) {
+	t.Parallel()
 
-// 	ringBuf := ringbuffer.New[int](3)
+	ringBuf := ringbuffer.NewMultiReaderBuf[int](3, 1)
 
-// 	if ringBuf.Cap() != 3 {
-// 		t.Errorf("Expected capacity 3, got %d", ringBuf.Cap())
-// 	}
+	if ringBuf.Cap() != 3 {
+		t.Errorf("Expected capacity 3, got %d", ringBuf.Cap())
+	}
 
-// 	if ringBuf.Len() != 0 {
-// 		t.Errorf("Expected length 0, got %d", ringBuf.Len())
-// 	}
+	ringBuf.Append(1)
+	ringBuf.Append(2)
+	ringBuf.Append(3)
 
-// 	ringBuf.Append(1)
-// 	ringBuf.Append(2)
-// 	ringBuf.Append(3)
+	if ringBuf.Cap() != 3 {
+		t.Errorf("Expected capacity 3, got %d", ringBuf.Cap())
+	}
 
-// 	if ringBuf.Cap() != 3 {
-// 		t.Errorf("Expected capacity 3, got %d", ringBuf.Cap())
-// 	}
+	ringBuf.Resize(10)
 
-// 	if ringBuf.Len() != 3 {
-// 		t.Errorf("Expected length 3, got %d", ringBuf.Len())
-// 	}
+	if ringBuf.Cap() != 10 {
+		t.Errorf("Expected capacity 10, got %d", ringBuf.Cap())
+	}
 
-// 	ringBuf.Resize(10)
+	expected := []int{1, 2, 3}
 
-// 	if ringBuf.Cap() != 10 {
-// 		t.Errorf("Expected capacity 10, got %d", ringBuf.Cap())
-// 	}
+	var result []int
 
-// 	if ringBuf.Len() != 3 {
-// 		t.Errorf("Expected length 3, got %d", ringBuf.Len())
-// 	}
+	ringBuf.ReaderRange(0, func(_ int, value int) bool {
+		result = append(result, value)
 
-// 	expected := []int{1, 2, 3}
+		return true
+	})
 
-// 	var result []int
+	if !reflect.DeepEqual(result, expected) {
+		t.Errorf("Expected %v, got %v", expected, result)
+	}
+}
 
-// 	ringBuf.Range(func(_ int, value int) bool {
-// 		result = append(result, value)
+func TestMultiReaderBuf_Range(t *testing.T) {
+	t.Parallel()
 
-// 		return true
-// 	})
+	ringBuf := ringbuffer.NewMultiReaderBuf[string](0, 1)
 
-// 	if !reflect.DeepEqual(result, expected) {
-// 		t.Errorf("Expected %v, got %v", expected, result)
-// 	}
-// }
+	ringBuf.Append("ten")
+	ringBuf.Append("twenty")
+	ringBuf.Append("thirty")
 
-// func TestMultiReaderBuf_Empty(t *testing.T) {
-// 	t.Parallel()
+	var result []string
 
-// 	ringBuf := ringbuffer.New[uint](5)
+	mapCopy := ringBuf.ReaderToMap(0)
 
-// 	ringBuf.Append(1)
-// 	ringBuf.Append(2)
-// 	ringBuf.Append(3)
+	itCount := 0
 
-// 	ringBuf.Empty()
+	ringBuf.ReaderRange(0, func(idx int, value string) bool {
+		result = append(result, value)
+		itCount++
 
-// 	if len(ringBuf.ToSlice()) != 0 {
-// 		t.Errorf("Expected empty buffer, got %v", ringBuf.ToSlice())
-// 	}
+		if mapVal, ok := mapCopy[idx]; !ok || mapVal != value {
+			if !ok {
+				t.Errorf("Expected map key %v, missing!", idx)
+			} else {
+				t.Errorf("Expected map[%v] == \"%v\", found \"%v\"", idx, value, mapVal)
+			}
+		}
 
-// 	if ringBuf.Cap() != 5 {
-// 		t.Errorf("Expected capacity 5, got %d", ringBuf.Cap())
-// 	}
-// }
+		return true
+	})
 
-// func TestMultiReaderBuf_Range(t *testing.T) {
-// 	t.Parallel()
+	if mapLen := len(mapCopy); mapLen != ringBuf.ReaderLen(0) {
+		t.Errorf("Expected %d elements in mapCopy, found %d.", ringBuf.ReaderLen(0), mapLen)
+	}
 
-// 	ringBuf := ringbuffer.New[string](0)
+	if itCount != ringBuf.ReaderLen(0) {
+		t.Errorf("Expected %d iterations, saw %d.", ringBuf.ReaderLen(0), itCount)
+	}
 
-// 	ringBuf.Append("ten")
-// 	ringBuf.Append("twenty")
-// 	ringBuf.Append("thirty")
+	expected := []string{"ten", "twenty", "thirty"}
+	if !reflect.DeepEqual(result, expected) {
+		t.Errorf("Expected %v, got %v", expected, result)
+	}
+}
 
-// 	var result []string
+//nolint: funlen // *FIXME*
+func TestMultiReaderBuf_Range_FromReaderObj(t *testing.T) {
+	t.Parallel()
 
-// 	mapCopy := ringBuf.ToMap()
+	ringBuf := ringbuffer.NewMultiReaderBuf[string](0, 3)
 
-// 	itCount := 0
+	ringBuf.Append("ten")
+	ringBuf.Append("twenty")
+	ringBuf.Append("thirty")
+	ringBuf.Append("forty")
+	ringBuf.Append("fifty")
+	ringBuf.Append("sixty")
 
-// 	ringBuf.Range(func(idx int, value string) bool {
-// 		result = append(result, value)
-// 		itCount++
+	itCount := 0
 
-// 		if mapVal, ok := mapCopy[idx]; !ok || mapVal != value {
-// 			if !ok {
-// 				t.Errorf("Expected map key %v, missing!", idx)
-// 			} else {
-// 				t.Errorf("Expected map[%v] == \"%v\", found \"%v\"", idx, value, mapVal)
-// 			}
-// 		}
+	readers := make([]*ringbuffer.Reader[string], 0, 3)
 
-// 		return true
-// 	})
+	ringBuf.RangeReaders(func(readerID int, reader *ringbuffer.Reader[string]) bool {
+		if reader == nil {
+			t.Errorf(
+				"RangeReaders called yield function with unexpected nil "+
+					"reader on iteration %d",
+				itCount,
+			)
+		} else if objReaderID := reader.ID(); readerID != objReaderID {
+			t.Errorf(
+				"RangeReaders called yield function with unexpected readerID "+
+					"%d on not matching reader.ID() %d",
+				readerID,
+				objReaderID,
+			)
+		}
 
-// 	if mapLen := len(mapCopy); mapLen != ringBuf.Len() {
-// 		t.Errorf("Expected %d elements in mapCopy, found %d.", ringBuf.Len(), mapLen)
-// 	}
+		if readerID != itCount {
+			t.Errorf(
+				"RangeReaders called yield function with unexpected readerID "+
+					"%d on iteration %d",
+				readerID,
+				itCount,
+			)
+		}
 
-// 	if itCount != ringBuf.Len() {
-// 		t.Errorf("Expected %d iterations, saw %d.", ringBuf.Len(), itCount)
-// 	}
+		if readerFromFunc := ringBuf.GetReader(readerID); readerFromFunc != reader {
+			t.Errorf(
+				"ringBuf.GetReader() gave reader %v when yield function given "+
+					"reader %v!",
+				readerFromFunc,
+				reader,
+			)
+		}
 
-// 	expected := []string{"ten", "twenty", "thirty"}
-// 	if !reflect.DeepEqual(result, expected) {
-// 		t.Errorf("Expected %v, got %v", expected, result)
-// 	}
-// }
+		reader.Discard(4 - itCount)
+
+		readers = append(readers, reader)
+		itCount++
+
+		return true
+	})
+
+	expected := []map[int]string{
+		{
+			4: "fifty",
+			5: "sixty",
+		},
+		{
+			3: "forty",
+			4: "fifty",
+			5: "sixty",
+		},
+		{
+			2: "thirty",
+			3: "forty",
+			4: "fifty",
+			5: "sixty",
+		},
+	}
+
+	for rID, reader := range readers {
+		var result []string
+
+		mapCopy := reader.ToMap()
+
+		itCount = 0
+
+		reader.Range(func(idx int, value string) bool {
+			result = append(result, value)
+			itCount++
+
+			if mapVal, ok := mapCopy[idx]; !ok || mapVal != value {
+				if !ok {
+					t.Errorf("Expected map key %v, missing!", idx)
+				} else {
+					t.Errorf("Expected map[%v] == \"%v\", found \"%v\"", idx, value, mapVal)
+				}
+			}
+
+			return true
+		})
+
+		if mapLen := len(mapCopy); mapLen != reader.Len() {
+			t.Errorf("Expected %d elements in mapCopy, found %d.", reader.Len(), mapLen)
+		}
+
+		if itCount != reader.Len() {
+			t.Errorf("Expected %d iterations, saw %d.", reader.Len(), itCount)
+		}
+
+		if !reflect.DeepEqual(expected[rID], mapCopy) {
+			t.Errorf("Expected %v, got %v", expected[rID], mapCopy)
+		}
+	}
+}
 
 func TestMultiReaderBuf_Range_EarlyExit(t *testing.T) {
 	t.Parallel()
