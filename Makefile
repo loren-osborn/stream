@@ -272,7 +272,7 @@ STALE_RENDERED_SRC_BLOBS := $(strip \
 			$(call \
 				GET_BLOB_FIELD,$\
 				$(blob),$\
-				$(BLOB_FIELD_FINAL_OUT)$\
+				$(BLOB_FIELD_RAW_SCRAPE)$\
 			),$\
 			$(firstword \
 				$(shell ls -1t $(call \
@@ -297,7 +297,7 @@ STALE_PACKAGE_DOCS_BLOBS := $(strip \
 			$(call \
 				GET_BLOB_FIELD,$\
 				$(blob),$\
-				$(BLOB_FIELD_FINAL_OUT)$\
+				$(BLOB_FIELD_RAW_SCRAPE)$\
 			),$\
 			$(firstword \
 				$(shell ls -1t $(call \
@@ -473,8 +473,6 @@ pkgsite_scrape_group: $(sort \
 		),$\
 		# no op$\
 	)
-
-
 
 docs: $(call \
 	GET_BLOB_FIELD,$\
