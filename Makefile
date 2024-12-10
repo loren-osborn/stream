@@ -96,17 +96,14 @@ ECHO_THEN_EXECUTE = $(if $(findstring q,$(MAKEFLAGS)),,echo $(call BASH_SINGLE_Q
 #
 define START_SERVER
 	echo "Starting $(1) server on port $(2)..." >&2; \
-	$(call ECHO_THEN_EXECUTE,$(1) -http=:$(2) &) echo $$! > $(1).pid; \
+	$(call ECHO_THEN_EXECUTE,$(1) -http=:$(2) > /dev/null 2> /dev/null &) echo $$! > $(1).pid; \
 	trap $(call BASH_SINGLE_QUOTE,$(call ECHO_THEN_EXECUTE,kill $$(cat $(1).pid)); rm $(1).pid) EXIT; \
 	timeout 10 sh -c $(call BASH_SINGLE_QUOTE,until wget --quiet --output-document=- --tries=1 --timeout=10 \
-	--server-response --spider $(call BASH_SINGLE_QUOTE,$(3)) > /dev/null ; do sleep 0.2; done) || \
+	--server-response --spider $(call BASH_SINGLE_QUOTE,$(3)) > /dev/null 2> /dev/null ; do sleep 0.2; done) || \
 		(echo "Error: $(1) server did not respond in time" >&2; exit 1)
 endef
 
 DOCS_OUTPUT_DIR := doc
-
-# Helper for starting godoc
-START_GODOC = $(call START_SERVER,godoc,$(GODOC_PORT),$(GODOC_URL)/pkg)
 
 PROD_GO_FILES = $(patsubst ./%,%,$(filter-out %_test.go,$(shell find . -type f -name '*.go')))
 PROD_GO_PACKAGES = $(patsubst ./%,%,$(patsubst %/,%,$(sort $(dir $(PROD_GO_FILES)))))
@@ -371,7 +368,7 @@ godoc_scrape_group: $(sort \
 			START_SERVER,$\
 			godoc,$\
 			$(GODOC_PORT),$\
-			http://localhost:$(GODOC_PORT)/pkg$\
+			http://localhost:$(GODOC_PORT)/pkg/$\
 		) $(foreach \
 			page_blob,$\
 			$(if \
@@ -382,6 +379,7 @@ godoc_scrape_group: $(sort \
 			; $(OPEN_PAREN) $(call \
 				ECHO_THEN_EXECUTE,$\
 				$(strip wget \
+					--quiet \
 					--page-requisites \
 					--convert-links \
 					--adjust-extension \
@@ -455,6 +453,7 @@ pkgsite_scrape_group: $(sort \
 			; $(OPEN_PAREN) $(call \
 				ECHO_THEN_EXECUTE,$\
 				$(strip wget \
+					--quiet \
 					--page-requisites \
 					--convert-links \
 					--adjust-extension \
