@@ -104,8 +104,6 @@ define START_SERVER
 endef
 
 DOCS_OUTPUT_DIR := doc
-# SRC_WEB_DIR := $(DOCS_OUTPUT_DIR)/src
-# CSS_DIR := $(DOCS_OUTPUT_DIR)/assets
 
 # Helper for starting godoc
 START_GODOC = $(call START_SERVER,godoc,$(GODOC_PORT),$(GODOC_URL)/pkg)
@@ -179,7 +177,7 @@ GET_GITKEEP = $(patsubst %,%/.gitkeep,$(patsubst %/,%,$(1)))
 # 
 # @return The resulting filename
 #
-TO_SRC_RAWHRML_FILENAME = $(patsubst %.go,doc/raw/godoc/src/$(PACKAGE_PATH)/%.go.html,$(1))
+TO_SRC_RAWHRML_FILENAME = $(patsubst %.go,$(DOCS_OUTPUT_DIR)/raw/godoc/src/$(PACKAGE_PATH)/%.go.html,$(1))
 
 
 ##
@@ -189,7 +187,7 @@ TO_SRC_RAWHRML_FILENAME = $(patsubst %.go,doc/raw/godoc/src/$(PACKAGE_PATH)/%.go
 # 
 # @return The resulting filename
 #
-TO_DOC_RAWHRML_FILENAME = $(patsubst %/..html,%.html,$(patsubst %,doc/raw/pkgsite/$(PACKAGE_PATH)/%.html,$(patsubst %/,%,$(1))))
+TO_DOC_RAWHRML_FILENAME = $(patsubst %/..html,%.html,$(patsubst %,$(DOCS_OUTPUT_DIR)/raw/pkgsite/$(PACKAGE_PATH)/%.html,$(patsubst %/,%,$(1))))
 
 
 ##
@@ -199,7 +197,7 @@ TO_DOC_RAWHRML_FILENAME = $(patsubst %/..html,%.html,$(patsubst %,doc/raw/pkgsit
 # 
 # @return The resulting filename
 #
-TO_RENDERED_SRC_FILENAME = $(patsubst %.go,doc/src/%.go.html,$(call FLATTEN_SRC,$(1)))
+TO_RENDERED_SRC_FILENAME = $(patsubst %.go,$(DOCS_OUTPUT_DIR)/src/%.go.html,$(call FLATTEN_SRC,$(1)))
 
 ##
 # @brief Transform a directory name containing go source files to a package documentation %.html filename
@@ -208,7 +206,7 @@ TO_RENDERED_SRC_FILENAME = $(patsubst %.go,doc/src/%.go.html,$(call FLATTEN_SRC,
 # 
 # @return The resulting filename
 #
-TO_PACKAGE_DOCS_FILENAME = $(patsubst %,doc/%.html,$(call FLATTEN_SRC,$(if $(filter .,$(1)),index,$(1))))
+TO_PACKAGE_DOCS_FILENAME = $(patsubst %,$(DOCS_OUTPUT_DIR)/%.html,$(call FLATTEN_SRC,$(if $(filter .,$(1)),index,$(1))))
 
 ##
 # @brief Extract a colon-delimited field by index from each space-delimited blob and replace commas with spaces
@@ -221,13 +219,10 @@ TO_PACKAGE_DOCS_FILENAME = $(patsubst %,doc/%.html,$(call FLATTEN_SRC,$(if $(fil
 GET_BLOB_FIELD = $(strip $(foreach blob,$(1),\
 	$(subst $(COMMA),$(SPACE),$(word $(2),$(subst :,$(SPACE),$(blob))))))
 
-BLOB_FIELD_SOURCES := 1
+BLOB_FIELD_SOURCES    := 1
 BLOB_FIELD_RAW_SCRAPE := 2
-BLOB_FIELD_FINAL_OUT := 3
+BLOB_FIELD_FINAL_OUT  := 3
 BLOB_FIELD_SERVER_URL := 4
-
-#doc/raw/godoc/src/$(PACKAGE_PATH)
-#doc/raw/pkgsite/$(PACKAGE_PATH)
 
 # For each html file we generate a blob of the form:
 # {comma seperated list of source files, sorted newest to oldest}:{raw scraped rendered file}:{file with adjusted URLs}:{server URL}
@@ -317,46 +312,15 @@ STALE_PACKAGE_DOCS_BLOBS := $(strip \
 	)$\
 )
 
-# $(error test output:$(NEWLINE)STALE_RENDERED_SRC_BLOBS = $(STALE_RENDERED_SRC_BLOBS)$(NEWLINE)STALE_PACKAGE_DOCS_BLOBS = $(STALE_PACKAGE_DOCS_BLOBS))
-
-
-# $(error test output:$(NEWLINE)RENDERED_SRC_BLOBS = $(RENDERED_SRC_BLOBS)$(NEWLINE)PACKAGE_DOCS_BLOBS = $(PACKAGE_DOCS_BLOBS))
-
-# # Rendered source files and package documentation files
-# RENDERED_SRC := $(call TO_RENDERED_SRC_FILENAME,$(PROD_GO_FILES))
-# PACKAGE_DOCS := $(call TO_PACKAGE_DOCS_FILENAME,$(PROD_GO_PACKAGES))
-
-# RAW_RENDERED_SRC := $(call TO_RAWHRML_FILENAME,$(RENDERED_SRC))
-# RAW_PACKAGE_DOCS := $(call TO_RAWHRML_FILENAME,$(PACKAGE_DOCS))
-
-# # Filter out missing rendered source files
-# PRESENT_RENDERED_SRC := $(filter $(wildcard $(RENDERED_SRC)),$(RENDERED_SRC))
-
-# # Filter out missing package documentation files
-# PRESENT_PACKAGE_DOCS := $(filter $(wildcard $(PACKAGE_DOCS)),$(PACKAGE_DOCS))
-
-
-# # Filter out stale rendered source files based on timestamps
-# UP_TO_DATE_RENDERED_SRC := $(filter-out \
-# 	$(foreach src,$(PROD_GO_FILES),$(if $(shell [ $(src) -nt doc/src/$(call FLATTEN_SRC,$(src)).go.html ] && echo doc/src/$(call FLATTEN_SRC,$(src)).go.html),doc/src/$(subst /,__,$(src)).go.html)) \
-# 	,$(PRESENT_RENDERED_SRC))
-
-
-# # Check if package documentation is up-to-date
-# UP_TO_DATE_PACKAGE_DOCS := $(filter-out \
-# 	$(foreach dir,$(PROD_GO_DIRS), \
-# 		$(if $(shell newest_file=$(call NEWEST_GO_FILE,$(dir)) && \
-# 			[ "$(newest_file)" -nt "doc/$(call FLATTEN_SRC,$(dir)).html" ] && echo "doc/$(call FLATTEN_SRC,$(dir)).html"), \
-# 		doc/$(subst /,__,$(dir)).html)) \
-# 	,$(PRESENT_PACKAGE_DOCS))
-# FLATTENED_GO_PACKAGES = $(foreach pkg,$(PROD_GO_PACKAGES),$(call FLATTEN_SRC,$(pkg)))
-
-GENERATED = coverage.html coverage.out godoc.pid $(DOCS_OUTPUT_DIR)/index.raw.html
-
-.PHONY: fmt lint test clean docs .FORCE # $(DOCS_OUTPUT_DIR)_POPULATED
 
 # Run all checks (test, lint, format)
-all: docs fmt lint test
+all: fmt lint test docs
+
+GENERATED = coverage.html coverage.out godoc.pid $(DOCS_OUTPUT_DIR)
+
+.PHONY: fmt lint test clean docs .FORCE
+
+.SECONDARY: godoc_scrape_group pkgsite_scrape_group
 
 # Run tests with race detection and coverage
 test: coverage.html
@@ -366,14 +330,14 @@ test: coverage.html
 	mkdir -p $(dir $@)
 	touch $@ # We don't **really** want a .gitkeep file... just working around a GNU Make glitch.
 
-docs: 
-
 # If there are stale pkgsite files, startup the server, scrape them, and bring it down:
 $(call \
 	GET_BLOB_FIELD,$\
 	$(RENDERED_SRC_BLOBS),$\
 	$(BLOB_FIELD_RAW_SCRAPE)$\
-) &: $(sort \
+) : godoc_scrape_group
+
+godoc_scrape_group: $(sort \
 	$(call \
 		GET_GITKEEP,$\
 		$(dir \
@@ -386,7 +350,7 @@ $(call \
 				),$\
 				$(BLOB_FIELD_RAW_SCRAPE)$\
 			)$\
-		) doc/raw/godoc/$\
+		) $(DOCS_OUTPUT_DIR)/raw/godoc/$\
 	) $(call \
 		GET_BLOB_FIELD,$\
 		$(if \
@@ -401,36 +365,40 @@ $(call \
 		$\
 	)$\
 )
-	@-$(call \
-		START_SERVER,$\
-		godoc,$\
-		$(GODOC_PORT),$\
-		http://localhost:$(GODOC_PORT)/pkg$\
-	) $(foreach \
-		page_blob,$\
-		$(if \
-			$(STALE_RENDERED_SRC_BLOBS),$\
-			$(STALE_RENDERED_SRC_BLOBS),$\
-			$(RENDERED_SRC_BLOBS)$\
-		),$\
-		; $(OPEN_PAREN) $(call \
-			ECHO_THEN_EXECUTE,$\
-			$(strip wget \
-				--page-requisites \
-				--convert-links \
-				--adjust-extension \
-				--no-host-directories \
-				--directory-prefix=doc/raw/godoc \
-				$(call \
-					BASH_SINGLE_QUOTE,$\
-					http://localhost:$(GODOC_PORT)/$(call \
-						GET_BLOB_FIELD,$\
-						$(page_blob),$\
-						$(BLOB_FIELD_SERVER_URL)$\
+	@-$(if \
+		$(STALE_RENDERED_SRC_BLOBS),$\
+		$(call \
+			START_SERVER,$\
+			godoc,$\
+			$(GODOC_PORT),$\
+			http://localhost:$(GODOC_PORT)/pkg$\
+		) $(foreach \
+			page_blob,$\
+			$(if \
+				$(STALE_RENDERED_SRC_BLOBS),$\
+				$(STALE_RENDERED_SRC_BLOBS),$\
+				$(RENDERED_SRC_BLOBS)$\
+			),$\
+			; $(OPEN_PAREN) $(call \
+				ECHO_THEN_EXECUTE,$\
+				$(strip wget \
+					--page-requisites \
+					--convert-links \
+					--adjust-extension \
+					--no-host-directories \
+					--directory-prefix=$(DOCS_OUTPUT_DIR)/raw/godoc \
+					$(call \
+						BASH_SINGLE_QUOTE,$\
+						http://localhost:$(GODOC_PORT)/$(call \
+							GET_BLOB_FIELD,$\
+							$(page_blob),$\
+							$(BLOB_FIELD_SERVER_URL)$\
+						)$\
 					)$\
 				)$\
-			)$\
-		) $(CLOSE_PAREN) $\
+			) $(CLOSE_PAREN) $\
+		),$\
+		# no op$\
 	)
 
 # If there are stale pkgsite files, startup the server, scrape them, and bring it down:
@@ -440,7 +408,9 @@ $(call \
 	GET_BLOB_FIELD,$\
 	$(PACKAGE_DOCS_BLOBS),$\
 	$(BLOB_FIELD_RAW_SCRAPE)$\
-) &: $(sort \
+) : pkgsite_scrape_group
+
+pkgsite_scrape_group: $(sort \
 	$(call \
 		GET_GITKEEP,$\
 		$(dir \
@@ -453,7 +423,7 @@ $(call \
 				),$\
 				$(BLOB_FIELD_RAW_SCRAPE)$\
 			)$\
-		) doc/raw/pkgsite/$\
+		) $(DOCS_OUTPUT_DIR)/raw/pkgsite/$\
 	) $(call \
 		GET_BLOB_FIELD,$\
 		$(if \
@@ -468,36 +438,40 @@ $(call \
 		$\
 	)$\
 )
-	@-$(call \
-		START_SERVER,$\
-		pkgsite,$\
-		$(PKGSITE_PORT),$\
-		http://localhost:$(PKGSITE_PORT)/$\
-	) $(foreach \
-		page_blob,$\
-		$(if \
-			$(STALE_PACKAGE_DOCS_BLOBS),$\
-			$(STALE_PACKAGE_DOCS_BLOBS),$\
-			$(PACKAGE_DOCS_BLOBS)$\
-		),$\
-		; $(OPEN_PAREN) $(call \
-			ECHO_THEN_EXECUTE,$\
-			$(strip wget \
-				--page-requisites \
-				--convert-links \
-				--adjust-extension \
-				--no-host-directories \
-				--directory-prefix=doc/raw/pkgsite \
-				$(call \
-					BASH_SINGLE_QUOTE,$\
-					http://localhost:$(PKGSITE_PORT)/$(call \
-						GET_BLOB_FIELD,$\
-						$(page_blob),$\
-						$(BLOB_FIELD_SERVER_URL)$\
+	@-$(if \
+		$(STALE_PACKAGE_DOCS_BLOBS),$\
+		$(call \
+			START_SERVER,$\
+			pkgsite,$\
+			$(PKGSITE_PORT),$\
+			http://localhost:$(PKGSITE_PORT)/$\
+		) $(foreach \
+			page_blob,$\
+			$(if \
+				$(STALE_PACKAGE_DOCS_BLOBS),$\
+				$(STALE_PACKAGE_DOCS_BLOBS),$\
+				$(PACKAGE_DOCS_BLOBS)$\
+			),$\
+			; $(OPEN_PAREN) $(call \
+				ECHO_THEN_EXECUTE,$\
+				$(strip wget \
+					--page-requisites \
+					--convert-links \
+					--adjust-extension \
+					--no-host-directories \
+					--directory-prefix=$(DOCS_OUTPUT_DIR)/raw/pkgsite \
+					$(call \
+						BASH_SINGLE_QUOTE,$\
+						http://localhost:$(PKGSITE_PORT)/$(call \
+							GET_BLOB_FIELD,$\
+							$(page_blob),$\
+							$(BLOB_FIELD_SERVER_URL)$\
+						)$\
 					)$\
 				)$\
-			)$\
-		) $(CLOSE_PAREN) $\
+			) $(CLOSE_PAREN) $\
+		),$\
+		# no op$\
 	)
 
 
@@ -530,50 +504,6 @@ fmt:
 	goimports -w $(PROD_GO_PACKAGES)
 
 
-# # Fetch main package documentation
-# $(DOCS_OUTPUT_DIR)/index.html:
-# 	mkdir -p $(DOCS_OUTPUT_DIR)
-# 	$(START_GODOC) ; curl -s $(GODOC_URL)/pkg/$(PACKAGE_PATH)/ > $@
-
-# $(DOCS_OUTPUT_DIR)_POPULATED:
-
-# $(DOCS_OUTPUT_DIR) $(SRC_WEB_DIR) $(CSS_DIR): Makefile
-# 	mkdir -p $@
-
-
-# # Generate GoDoc
-# $(DOCS_OUTPUT_DIR):  $(shell find $(PROD_GO_PACKAGES) -type f -name '*.go' | sed -e 's,^\./,,' | sort -u) Makefile
-# 	mkdir -p doc
-# 	godoc -html -goroot=$(GOPATH) -url="/pkg/$(shell basename $(PWD))/" > doc.html
-
-# $(DOCS_OUTPUT_DIR)_POPULATED: $(DOCS_OUTPUT_DIR)/index.html $(CSS_DIR)
-
-# # Fetch main package documentation
-# $(DOCS_OUTPUT_DIR)/index.html:   $(shell find $(PROD_GO_PACKAGES) -type f -name '*.go' | sed -e 's,^\./,,' | sort -u) Makefile
-# 	mkdir -p $(DOCS_OUTPUT_DIR)
-# 	curl -s $(GODOC_URL)/pkg/$(PACKAGE_PATH) > $@
-
-# # Fetch CSS and assets
-# $(CSS_DIR): Makefile
-# 	mkdir -p $(CSS_DIR)
-# 	wget -r -np -k -P $(CSS_DIR) $(GODOC_URL)/lib/godoc
-
-# # Generate subpackage documentation
-# $(DOCS_OUTPUT_DIR)/pkg/%.html:  $(shell find $(PROD_GO_PACKAGES) -type f -name '*.go' | sed -e 's,^\./,,' | sort -u) Makefile
-# 	mkdir -p $(DOCS_OUTPUT_DIR)/pkg
-# 	curl -s $(GODOC_URL)/pkg/$(PACKAGE_PATH)/$* > $@
-
-# # Include source code
-# $(SRC_WEB_DIR):  $(shell find $(PROD_GO_PACKAGES) -type f -name '*.go' | sed -e 's,^\./,,' | sort -u) Makefile
-# 	mkdir -p $(SRC_WEB_DIR)
-# 	rsync -av --exclude 'vendor/' --exclude 'testdata/' $(PROJECT_DIR)/ $(SRC_WEB_DIR)
-
-# # Fix links in generated HTML
-# fix-links: $(DOCS_OUTPUT_DIR)/index.html
-# 	find $(DOCS_OUTPUT_DIR) -name "*.html" -exec sed -i \
-# 		-e 's|href="/pkg/|href="./pkg/|g' \
-# 		-e 's|src="/lib/godoc/|src="./assets/css/|g' \
-# 		{} +
 
 clean:
 	@echo "Cleaning generated files..." >&2
@@ -595,6 +525,25 @@ clean:
 	        echo "Process already stopped or does not exist. (Stale godoc.pid file)" >&2; \
 	    fi; \
 	    rm -f godoc.pid; \
+	fi
+	@if [ -f pkgsite.pid ]; then \
+	    echo "Stopping pkgsite server..." >&2; \
+	    PID=$$(cat pkgsite.pid); \
+	    if kill -0 $$PID 2>/dev/null; then \
+	        kill -1 $$PID; \
+	        TIMEOUT=20; \
+	        while kill -0 $$PID 2>/dev/null && [ $$TIMEOUT -gt 0 ]; do \
+	            sleep 0.5; \
+	            TIMEOUT=$$((TIMEOUT - 1)); \
+	        done; \
+	        if kill -0 $$PID 2>/dev/null; then \
+	            echo "Process did not terminate gracefully, sending SIGKILL..." >&2; \
+	            kill -9 $$PID; \
+	        fi; \
+	    else \
+	        echo "Process already stopped or does not exist. (Stale pkgsite.pid file)" >&2; \
+	    fi; \
+	    rm -f pkgsite.pid; \
 	fi
 	rm -rf $(GENERATED)
 
