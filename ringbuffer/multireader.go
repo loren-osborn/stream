@@ -334,13 +334,34 @@ func (mrb *MultiReaderBuf[T]) RangeReaders(yeildFunc func(readerID int, reader *
 
 	// Iterate over the copied readers outside the lock
 	for i, rObj := range localReaders {
-		if !yeildFunc(i, rObj) {
-			break
+		if rObj != nil {
+			if !yeildFunc(i, rObj) {
+				break
+			}
 		}
 	}
 }
 
-// func (mrb *MultiReaderBuf[T]) LenReaders() int
+// LenReaders returns the number of readers viewing this buffer.
+func (mrb *MultiReaderBuf[T]) LenReaders() int {
+	result := 0
+
+	mrb.RangeReaders(func(_ int, _ *Reader[T]) bool {
+		result++
+
+		return true
+	})
+
+	return result
+}
+
+// RangeLenReaders returns the number of reader slots allocated for this buffer.
+func (mrb *MultiReaderBuf[T]) RangeLenReaders() int {
+	mrb.mu.RLock()
+	defer mrb.mu.RUnlock()
+
+	return len(mrb.readers)
+}
 
 // // Reader proxy methods
 // func (r *Reader[T]) PeekFirst() (*T, error)

@@ -694,22 +694,31 @@ func TestMultiReaderBuf_CloseReader(t *testing.T) {
 	})
 }
 
-// func TestMultiReaderBuf_LenReaders(t *testing.T) {
-//	t.Parallel()
-// 	// These steps depend on each other, so we won't use t.Run() here.
-// 	mrb := ringbuffer.NewMultiReaderBuf[int](4, 3)
-// 	initialCount := mrb.LenReaders()
-// 	if initialCount != 3 {
-// 		t.Errorf("Expected 3 readers, got %d", initialCount)
-// 	}
+func TestMultiReaderBuf_LenReaders(t *testing.T) {
+	t.Parallel()
 
-// 	err := mrb.CloseReader(1)
-// 	if err != nil {
-// 		t.Errorf("Unexpected error closing reader 1: %v", err)
-// 	}
+	// These steps depend on each other, so we won't use t.Run() here.
+	mrb := ringbuffer.NewMultiReaderBuf[int](4, 3)
+	initialCount := mrb.LenReaders()
 
-// 	afterCloseCount := mrb.LenReaders()
-// 	if afterCloseCount != 2 {
-// 		t.Errorf("Expected 2 readers after closing one, got %d", afterCloseCount)
-// 	}
-// }
+	if initialCount != 3 {
+		t.Errorf("Expected 3 readers, got %d", initialCount)
+	}
+
+	initialRangeCount := mrb.RangeLenReaders()
+	if initialRangeCount != 3 {
+		t.Errorf("Expected 3 reader slots, got %d", initialRangeCount)
+	}
+
+	mrb.CloseReader(1)
+
+	afterCloseCount := mrb.LenReaders()
+	if afterCloseCount != 2 {
+		t.Errorf("Expected 2 readers after closing one, got %d", afterCloseCount)
+	}
+
+	afterRangeCount := mrb.RangeLenReaders()
+	if afterRangeCount != 3 {
+		t.Errorf("Expected 3 reader slots after closing one, got %d", afterRangeCount)
+	}
+}
