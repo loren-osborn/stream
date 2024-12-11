@@ -894,3 +894,302 @@ func TestMultiReaderBuf_ErrorConditions(t *testing.T) {
 		_, _ = mrb.ReaderConsumeFirst(1)
 	})
 }
+
+// Test creating a MultiReaderBuf with zero readers.
+// This should panic with a known message.
+func TestMultiReaderBuf_NoReadersCreation(t *testing.T) {
+	t.Parallel()
+
+	defer func() {
+		expected := "must have at least one reader"
+
+		if r := recover(); r == nil {
+			t.Errorf("Expected panic creating MultiReaderBuf with 0 readers, got none")
+		} else if r != expected {
+			t.Errorf("Got panic %q, expected %q", r, expected)
+		}
+	}()
+
+	_ = ringbuffer.NewMultiReaderBuf[int](4, 0) // Invalid: no readers
+}
+
+// setupClosedMultiReaderBuf creates a MultiReaderBuf with a single reader,
+// appends some values, and then closes the reader.
+func setupClosedMultiReaderBuf(t *testing.T) *ringbuffer.MultiReaderBuf[int] {
+	t.Helper() // Mark this function as a test helper
+
+	mrb := ringbuffer.NewMultiReaderBuf[int](4, 1)
+
+	mrb.Append(10)
+	mrb.Append(20)
+	mrb.Append(30)
+	mrb.CloseReader(0)
+
+	return mrb
+}
+
+// After closing the last reader, Cap should not panic or change state.
+func TestMultiReaderBuf_CapAfterLastReaderClosed(t *testing.T) {
+	t.Parallel()
+
+	mrb := setupClosedMultiReaderBuf(t)
+
+	c := mrb.Cap()
+	if c != 0 {
+		t.Errorf("Expected capacity to drop to 0, got %d", c)
+	}
+}
+
+// After closing the last reader, Append should not panic or change state.
+func TestMultiReaderBuf_AppendAfterLastReaderClosed(t *testing.T) {
+	t.Parallel()
+
+	mrb := setupClosedMultiReaderBuf(t)
+	prevCap := mrb.Cap()
+	prevReaderCount := mrb.LenReaders()
+
+	idx := mrb.Append(40) // Should have no effect
+	if idx >= 0 {
+		t.Errorf("Expected illegal negative insertion index, got %d", idx)
+	}
+
+	if mrb.LenReaders() != prevReaderCount {
+		t.Errorf("Expected no change in LenReaders after Append, got %d", mrb.LenReaders())
+	}
+
+	if c := mrb.Cap(); c != 0 {
+		t.Errorf("Expected capacity to drop to 0, previously %d, got %d", prevCap, c)
+	}
+}
+
+// After closing the last reader, Resize should not panic or change state.
+func TestMultiReaderBuf_ResizeAfterLastReaderClosed(t *testing.T) {
+	t.Parallel()
+
+	mrb := setupClosedMultiReaderBuf(t)
+	prevCap := mrb.Cap()
+	prevReaderCount := mrb.LenReaders()
+
+	mrb.Resize(8) // Should have no effect
+
+	if mrb.LenReaders() != prevReaderCount {
+		t.Errorf("Expected no change in LenReaders after Resize, got %d", mrb.LenReaders())
+	}
+
+	if c := mrb.Cap(); c != prevCap {
+		t.Errorf("Expected capacity to remain %d, got %d", prevCap, c)
+	}
+}
+
+func TestMultiReaderBuf_ReaderAt_ClosedReaderID(t *testing.T) {
+	t.Parallel()
+
+	mrb := ringbuffer.NewMultiReaderBuf[int](4, 2)
+	mrb.Append(10)
+	mrb.Append(20)
+
+	// Close reader 0
+	mrb.CloseReader(0)
+
+	defer func() {
+		reader := recover()
+		if reader == nil {
+			t.Errorf("Expected panic for accessing closed ReaderID, got none")
+
+			return
+		}
+
+		expected := "Can't read from a non-existent reader"
+		if reader != expected {
+			t.Errorf("Got panic %q, expected %q", reader, expected)
+		}
+	}()
+
+	_ = mrb.ReaderAt(0, mrb.ReaderRangeFirst(0)) // Access closed ReaderID
+}
+
+func TestMultiReaderBuf_ReaderAt_IndexBeforeRangeFirst(t *testing.T) {
+	t.Parallel()
+
+	mrb := ringbuffer.NewMultiReaderBuf[int](1, 2)
+	mrb.Append(10)
+	mrb.Append(20)
+
+	readerID := 0
+
+	mrb.ReaderDiscard(readerID, 1)
+
+	rangeFirst := mrb.ReaderRangeFirst(readerID)
+
+	defer func() {
+		reader := recover()
+		if reader == nil {
+			t.Errorf("Expected panic for index before ReaderRangeFirst, got none")
+
+			return
+		}
+
+		expected := "Attempted to access index 0 before initial index 1"
+		if reader != expected {
+			t.Errorf("Got panic %q, expected %q", reader, expected)
+		}
+	}()
+
+	_ = mrb.ReaderAt(readerID, rangeFirst-1) // Access index before ReaderRangeFirst
+}
+
+func TestMultiReaderBuf_ReaderRange_ClosedReaderID(t *testing.T) {
+	t.Parallel()
+
+	mrb := ringbuffer.NewMultiReaderBuf[int](4, 2)
+	mrb.Append(10)
+	mrb.Append(20)
+	mrb.Append(30)
+
+	// Close ReaderID 0
+	mrb.CloseReader(0)
+
+	// Attempt to iterate over the range with the closed reader
+	var iterations int
+
+	mrb.ReaderRange(0, func(_ int, _ int) bool {
+		iterations++
+
+		return true
+	})
+
+	// Verify there were no iterations
+	if iterations != 0 {
+		t.Errorf("Expected 0 iterations for closed ReaderID, got %d", iterations)
+	}
+}
+
+func TestMultiReaderBuf_CloseReaderWithHigherRangeFirst(t *testing.T) {
+	t.Parallel()
+
+	mrb := ringbuffer.NewMultiReaderBuf[int](4, 2)
+	mrb.Append(10)
+	mrb.Append(20)
+	mrb.Append(30)
+	mrb.Append(40)
+
+	// Reader 0 consumes the first two elements
+	_, _ = mrb.ReaderConsumeFirst(0)
+	_, _ = mrb.ReaderConsumeFirst(0)
+
+	// Verify RangeFirst for both readers
+	rangeFirst0 := mrb.ReaderRangeFirst(0) // Should point to the third element
+	rangeFirst1 := mrb.ReaderRangeFirst(1) // Should point to the first element
+
+	if rangeFirst0 <= rangeFirst1 {
+		t.Fatalf("Expected RangeFirst for reader 0 (%d) to be greater than reader 1 (%d)", rangeFirst0, rangeFirst1)
+	}
+
+	// Close reader 0
+	mrb.CloseReader(0)
+
+	// Verify that reader 1 is unaffected
+	var reader1Values []int
+
+	mrb.ReaderRange(1, func(_ int, value int) bool {
+		reader1Values = append(reader1Values, value)
+
+		return true
+	})
+
+	expectedValues := []int{10, 20, 30, 40}
+	if len(reader1Values) != len(expectedValues) {
+		t.Errorf("Expected reader 1 to see %d elements, got %d", len(expectedValues), len(reader1Values))
+	}
+
+	for i, v := range expectedValues {
+		if reader1Values[i] != v {
+			t.Errorf("Expected value %d at index %d for reader 1, got %d", v, i, reader1Values[i])
+		}
+	}
+
+	// Verify that the buffer did not discard elements since reader 1 still references them
+	if mrb.ReaderRangeFirst(1) != rangeFirst1 {
+		t.Errorf("Expected RangeFirst for reader 1 to remain %d, got %d", rangeFirst1, mrb.ReaderRangeFirst(1))
+	}
+}
+
+//nolint: funlen // *FIXME*
+func TestMultiReaderBuf_CloseReaderWithLowerRangeFirst(t *testing.T) {
+	t.Parallel()
+
+	mrb := ringbuffer.NewMultiReaderBuf[int](6, 3)
+	mrb.Append(10)
+	mrb.Append(20)
+	mrb.Append(30)
+	mrb.Append(40)
+	mrb.Append(50)
+	mrb.Append(60)
+
+	// Advance readers 1 and 2 beyond the range of reader 0
+	for range 4 {
+		_, _ = mrb.ReaderConsumeFirst(1)
+		_, _ = mrb.ReaderConsumeFirst(2)
+	}
+
+	// Verify preconditions
+	rangeFirst0 := mrb.ReaderRangeFirst(0) // Should still point to the first element
+	rangeFirst1 := mrb.ReaderRangeFirst(1) // Should point to the fifth element
+	rangeFirst2 := mrb.ReaderRangeFirst(2) // Should point to the fifth element
+
+	if !(rangeFirst1 > rangeFirst0 && rangeFirst2 > rangeFirst0) {
+		t.Fatalf(
+			"Expected RangeFirst of readers 1 (%d) and 2 (%d) to be greater than reader 0 (%d)",
+			rangeFirst1,
+			rangeFirst2,
+			rangeFirst0,
+		)
+	}
+
+	// Close reader 0
+	mrb.CloseReader(0)
+
+	// Verify the buffer has discarded elements up to the minimum RangeFirst of the remaining readers
+	if discardedStart := mrb.ReaderRangeFirst(1); discardedStart != rangeFirst1 {
+		t.Errorf(
+			"Expected buffer to discard elements up to RangeFirst of remaining readers (%d), got %d",
+			rangeFirst1,
+			discardedStart,
+		)
+	}
+
+	// Verify the remaining readers are unaffected
+	var reader1Values, reader2Values []int
+
+	mrb.ReaderRange(1, func(_ int, value int) bool {
+		reader1Values = append(reader1Values, value)
+
+		return true
+	})
+	mrb.ReaderRange(2, func(_ int, value int) bool {
+		reader2Values = append(reader2Values, value)
+
+		return true
+	})
+
+	expectedValues := []int{50, 60}
+	if len(reader1Values) != len(expectedValues) {
+		t.Errorf("Expected reader 1 to see %d elements, got %d", len(expectedValues), len(reader1Values))
+	}
+
+	for i, v := range expectedValues {
+		if reader1Values[i] != v {
+			t.Errorf("Expected value %d at index %d for reader 1, got %d", v, i, reader1Values[i])
+		}
+	}
+
+	if len(reader2Values) != len(expectedValues) {
+		t.Errorf("Expected reader 2 to see %d elements, got %d", len(expectedValues), len(reader2Values))
+	}
+
+	for i, v := range expectedValues {
+		if reader2Values[i] != v {
+			t.Errorf("Expected value %d at index %d for reader 2, got %d", v, i, reader2Values[i])
+		}
+	}
+}

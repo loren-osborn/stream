@@ -22,11 +22,16 @@ type Reader[T any] struct {
 
 // NewMultiReaderBuf creates a new Multi-Reader ring buffer with a given capacity and number of readers.
 func NewMultiReaderBuf[T any](capacity int, numReaders int) *MultiReaderBuf[T] {
+	if numReaders < 1 {
+		panic("must have at least one reader")
+	}
+
 	result := &MultiReaderBuf[T]{
 		mu:      sync.RWMutex{},
 		data:    New[T](capacity),
 		readers: make([]*Reader[T], numReaders),
 	}
+
 	for readerID := range numReaders {
 		result.readers[readerID] = &Reader[T]{
 			owner:    result,
@@ -299,9 +304,7 @@ func (mrb *MultiReaderBuf[T]) CloseReader(readerID int) {
 		return
 	}
 
-	if newMinIdx == -1 {
-		panic("INTERNAL ERROR: newMinIdx not set")
-	}
+	assertf(newMinIdx != -1, "INTERNAL ERROR: newMinIdx not set")
 
 	if newMinIdx > prevMinIdx {
 		mrb.data.Discard(newMinIdx - prevMinIdx)
@@ -485,39 +488,32 @@ func (mrb *MultiReaderBuf[T]) internalIsReaderValid(readerID int) bool {
 		return false
 	}
 
-	if mrb.readers[readerID].owner != mrb {
-		panic(fmt.Sprintf(
-			"INTERNAL ERROR: reader has bad owner %v, expected %v",
-			mrb.readers[readerID].owner,
-			mrb,
-		))
-	}
-
-	if mrb.readers[readerID].readerID != readerID {
-		panic(fmt.Sprintf(
-			"INTERNAL ERROR: reader %d has bad readerID %d",
-			readerID,
-			mrb.readers[readerID].readerID,
-		))
-	}
-
-	if mrb.readers[readerID].offset > mrb.data.RangeLen() {
-		panic(fmt.Sprintf(
-			"INTERNAL ERROR: reader %d off end of ring buffer at index %d (max %d)",
-			readerID,
-			mrb.readers[readerID].offset,
-			mrb.data.RangeLen(),
-		))
-	}
-
-	if mrb.readers[readerID].offset < mrb.data.RangeFirst() {
-		panic(fmt.Sprintf(
-			"INTERNAL ERROR: reader %d off beginning of ring buffer at index %d (min %d)",
-			readerID,
-			mrb.readers[readerID].offset,
-			mrb.data.RangeFirst(),
-		))
-	}
+	assertf(
+		mrb.readers[readerID].owner == mrb,
+		"INTERNAL ERROR: reader has bad owner %v, expected %v",
+		mrb.readers[readerID].owner,
+		mrb,
+	)
+	assertf(
+		mrb.readers[readerID].readerID == readerID,
+		"INTERNAL ERROR: reader %d has bad readerID %d",
+		readerID,
+		mrb.readers[readerID].readerID,
+	)
+	assertf(
+		mrb.readers[readerID].offset <= mrb.data.RangeLen(),
+		"INTERNAL ERROR: reader %d off end of ring buffer at index %d (max %d)",
+		readerID,
+		mrb.readers[readerID].offset,
+		mrb.data.RangeLen(),
+	)
+	assertf(
+		mrb.readers[readerID].offset >= mrb.data.RangeFirst(),
+		"INTERNAL ERROR: reader %d off beginning of ring buffer at index %d (min %d)",
+		readerID,
+		mrb.readers[readerID].offset,
+		mrb.data.RangeFirst(),
+	)
 
 	return true
 }
