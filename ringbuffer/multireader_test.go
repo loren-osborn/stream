@@ -464,6 +464,7 @@ func TestMultiReaderBuf_IndexAfter_PanicHandling(t *testing.T) {
 	_ = ringBuf.ReaderAt(0, rangeLen)
 }
 
+//nolint: cyclop // *FIXME*
 func TestMultiReaderBuf_ReaderPeekFirst(t *testing.T) {
 	t.Parallel()
 
@@ -485,6 +486,23 @@ func TestMultiReaderBuf_ReaderPeekFirst(t *testing.T) {
 	mrb.Append(20)
 	mrb.Append(30)
 
+	if rLen := mrb.ReaderLen(0); rLen != 3 {
+		t.Errorf("Expected Reader 0's length to be 3, got %d", rLen)
+	}
+
+	val, err = mrb.ReaderPeekFirst(0)
+	if err != nil {
+		t.Errorf("Unexpected error: %v", err)
+	}
+
+	if val == nil || *val != 10 {
+		t.Errorf("Expected first element 10, got %v", val)
+	}
+
+	if rLen := mrb.ReaderLen(0); rLen != 3 {
+		t.Errorf("Expected Reader 0's length to be 3, got %d", rLen)
+	}
+
 	val, err = mrb.ReaderPeekFirst(0)
 	if err != nil {
 		t.Errorf("Unexpected error: %v", err)
@@ -503,4 +521,67 @@ func TestMultiReaderBuf_ReaderPeekFirst(t *testing.T) {
 	}()
 
 	_, _ = mrb.ReaderPeekFirst(999) // Invalid ID
+}
+
+//nolint: cyclop // *FIXME*
+func TestMultiReaderBuf_ReaderConsumeFirst(t *testing.T) {
+	t.Parallel()
+
+	mrb := ringbuffer.NewMultiReaderBuf[int](4, 2)
+
+	val, err := mrb.ReaderConsumeFirst(0)
+	if err == nil {
+		t.Errorf("Expected error when peeking empty reader, got nil")
+	} else if !errors.Is(err, io.EOF) {
+		t.Errorf("expected error %v, got %v", io.EOF, err)
+	}
+
+	if val != nil {
+		t.Errorf("Expected nil value with error condition, got %v", *val)
+	}
+
+	// Add some values
+	mrb.Append(10)
+	mrb.Append(20)
+	mrb.Append(30)
+
+	if rLen := mrb.ReaderLen(0); rLen != 3 {
+		t.Errorf("Expected Reader 0's length to be 3, got %d", rLen)
+	}
+
+	val, err = mrb.ReaderConsumeFirst(0)
+	if err != nil {
+		t.Errorf("Unexpected error: %v", err)
+	}
+
+	if val == nil || *val != 10 {
+		t.Errorf("Expected first element 10, got %v", val)
+	}
+
+	if rLen := mrb.ReaderLen(0); rLen != 2 {
+		t.Errorf("Expected Reader 0's length to be 2, got %d", rLen)
+	}
+
+	val, err = mrb.ReaderConsumeFirst(0)
+	if err != nil {
+		t.Errorf("Unexpected error: %v", err)
+	}
+
+	if val == nil || *val != 20 {
+		t.Errorf("Expected first element 20, got %v", val)
+	}
+
+	if rLen := mrb.ReaderLen(0); rLen != 1 {
+		t.Errorf("Expected Reader 0's length to be 1, got %d", rLen)
+	}
+
+	defer func() {
+		if r := recover(); r == nil {
+			t.Errorf("Expected panic for invalid reader ID, got none")
+		} else if r != "Attempting to use readerID 2 when only 2 readers allocated" {
+			t.Errorf("Got panic \"%v\" when \"Attempting to use readerID 2 when only 2 readers allocated\" expected", r)
+		}
+	}()
+
+	_, _ = mrb.ReaderConsumeFirst(2) // Invalid ID
 }

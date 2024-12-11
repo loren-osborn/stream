@@ -82,7 +82,8 @@ func (mrb *MultiReaderBuf[T]) Resize(newLen int) {
 
 // Reader methods
 
-// ReaderPeekFirst returns a pointer to the first element from the POV of reader readerID.
+// ReaderPeekFirst returns a pointer to the first element from the POV of reader
+// readerID, leaving it in place.
 func (mrb *MultiReaderBuf[T]) ReaderPeekFirst(readerID int) (*T, error) {
 	mrb.mu.RLock()
 	defer mrb.mu.RUnlock()
@@ -100,7 +101,26 @@ func (mrb *MultiReaderBuf[T]) ReaderPeekFirst(readerID int) (*T, error) {
 	return &result, nil
 }
 
-// func (mrb *MultiReaderBuf[T]) ReaderConsumeFirst(readerID int) (*T, error)
+// ReaderConsumeFirst returns a pointer to the first element from the POV of reader
+// readerID, removing it from visibility.
+func (mrb *MultiReaderBuf[T]) ReaderConsumeFirst(readerID int) (*T, error) {
+	mrb.mu.RLock()
+	defer mrb.mu.RUnlock()
+
+	if !mrb.internalIsReaderValid(readerID) {
+		panic("Can't read from a non-existent reader")
+	}
+
+	if mrb.internalReaderLen(readerID) < 1 {
+		return nil, io.EOF
+	}
+
+	result := mrb.data.At(mrb.readers[readerID].offset)
+
+	mrb.internalReaderDiscard(readerID, 1)
+
+	return &result, nil
+}
 
 // ReaderAt retrieves the value at a specific absolute index from the POV of reader readerID.
 //
