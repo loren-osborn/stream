@@ -45,6 +45,10 @@ func (mrb *MultiReaderBuf[T]) Append(value T) int {
 	mrb.mu.Lock()
 	defer mrb.mu.Unlock()
 
+	if mrb.data == nil {
+		return -1
+	}
+
 	return mrb.data.Append(value)
 }
 
@@ -55,6 +59,10 @@ func (mrb *MultiReaderBuf[T]) Append(value T) int {
 func (mrb *MultiReaderBuf[T]) Cap() int {
 	mrb.mu.RLock()
 	defer mrb.mu.RUnlock()
+
+	if mrb.data == nil {
+		return 0
+	}
 
 	return mrb.data.Cap()
 }
@@ -77,6 +85,10 @@ func (mrb *MultiReaderBuf[T]) Resize(newLen int) {
 	mrb.mu.Lock()
 	defer mrb.mu.Unlock()
 
+	if mrb.data == nil {
+		return
+	}
+
 	mrb.data.Resize(newLen)
 }
 
@@ -89,7 +101,7 @@ func (mrb *MultiReaderBuf[T]) ReaderPeekFirst(readerID int) (*T, error) {
 	defer mrb.mu.RUnlock()
 
 	if !mrb.internalIsReaderValid(readerID) {
-		panic("Can't read from a non-existent reader")
+		return nil, io.EOF
 	}
 
 	if mrb.internalReaderLen(readerID) < 1 {
@@ -104,8 +116,8 @@ func (mrb *MultiReaderBuf[T]) ReaderPeekFirst(readerID int) (*T, error) {
 // ReaderConsumeFirst returns a pointer to the first element from the POV of reader
 // readerID, removing it from visibility.
 func (mrb *MultiReaderBuf[T]) ReaderConsumeFirst(readerID int) (*T, error) {
-	mrb.mu.RLock()
-	defer mrb.mu.RUnlock()
+	mrb.mu.Lock()
+	defer mrb.mu.Unlock()
 
 	if !mrb.internalIsReaderValid(readerID) {
 		panic("Can't read from a non-existent reader")
@@ -246,7 +258,55 @@ func (mrb *MultiReaderBuf[T]) ReaderToMap(readerID int) map[int]T {
 }
 
 // // Reader management
-// func (mrb *MultiReaderBuf[T]) CloseReader(readerID int).
+
+// CloseReader destroys the reader with the given ID.
+func (mrb *MultiReaderBuf[T]) CloseReader(readerID int) {
+	mrb.mu.Lock()
+	defer mrb.mu.Unlock()
+
+	if !mrb.internalIsReaderValid(readerID) {
+		// already closed
+		return
+	}
+
+	newReaderCount := 0
+	prevMinIdx := mrb.readers[readerID].offset
+	newMinIdx := -1
+
+	for ID, pReader := range mrb.readers {
+		if (ID != readerID) && (pReader != nil) {
+			newReaderCount++
+
+			if prevMinIdx > pReader.offset {
+				prevMinIdx = pReader.offset
+			}
+
+			if (newMinIdx == -1) || (newMinIdx > pReader.offset) {
+				newMinIdx = pReader.offset
+			}
+		}
+	}
+
+	// reset Reader[T] to ZeroValue before removing it:
+	mrb.readers[readerID].owner = nil
+	mrb.readers[readerID].readerID = 0
+	mrb.readers[readerID].offset = 0
+	mrb.readers[readerID] = nil
+
+	if newReaderCount < 1 {
+		mrb.data = nil
+
+		return
+	}
+
+	if newMinIdx == -1 {
+		panic("INTERNAL ERROR: newMinIdx not set")
+	}
+
+	if newMinIdx > prevMinIdx {
+		mrb.data.Discard(newMinIdx - prevMinIdx)
+	}
+}
 
 // GetReader returns the reader with the specified readerID.
 func (mrb *MultiReaderBuf[T]) GetReader(readerID int) *Reader[T] {
@@ -435,7 +495,7 @@ func (mrb *MultiReaderBuf[T]) internalReaderDiscard(readerID int, count int) {
 	newMinIdx := prevMinIdx + count
 
 	for ID, pReader := range mrb.readers {
-		if (ID != readerID) && (mrb.readers[readerID] != nil) {
+		if (ID != readerID) && (pReader != nil) {
 			if prevMinIdx > pReader.offset {
 				prevMinIdx = pReader.offset
 			}

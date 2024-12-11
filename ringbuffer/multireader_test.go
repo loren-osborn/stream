@@ -638,3 +638,78 @@ func TestMultiReaderBuf_ReaderToSlice(t *testing.T) {
 		mrb.ReaderToSlice(-1)
 	})
 }
+
+func TestMultiReaderBuf_CloseReader(t *testing.T) {
+	t.Parallel()
+
+	t.Run("CloseValidReader", func(t *testing.T) {
+		t.Parallel()
+
+		mrb := ringbuffer.NewMultiReaderBuf[int](4, 2)
+
+		mrb.Append(100)
+		mrb.Append(200)
+
+		mrb.CloseReader(0)
+
+		val, err := mrb.ReaderPeekFirst(0)
+
+		if err == nil {
+			t.Errorf("Expected error when accessing closed reader, got nil")
+		} else if !errors.Is(err, io.EOF) {
+			t.Errorf("expected error %v, got %v", io.EOF, err)
+		}
+
+		if val != nil {
+			t.Errorf("Expected nil val pointer, got pointer to %v", *val)
+		}
+
+		val, err = mrb.ReaderPeekFirst(1)
+		if err != nil || val == nil || *val != 100 {
+			t.Errorf("Expected reader 1 first element 100, got %v (err: %v)", val, err)
+		}
+	})
+
+	t.Run("CloseNonExistentReader", func(t *testing.T) {
+		t.Parallel()
+
+		defer func() {
+			if r := recover(); r == nil {
+				t.Errorf("Expected panic for invalid reader ID, got none")
+			} else if r != "Attempting to use readerID 999 when only 2 readers allocated" {
+				t.Errorf("Got panic \"%v\" when \"Attempting to use readerID 999 when only 2 readers allocated\" expected", r)
+			}
+		}()
+
+		mrb := ringbuffer.NewMultiReaderBuf[int](4, 2)
+		mrb.CloseReader(999)
+	})
+
+	t.Run("CloseReaderTwice", func(t *testing.T) {
+		t.Parallel()
+
+		mrb := ringbuffer.NewMultiReaderBuf[int](0, 1)
+		mrb.CloseReader(0)
+		mrb.CloseReader(0)
+	})
+}
+
+// func TestMultiReaderBuf_LenReaders(t *testing.T) {
+//	t.Parallel()
+// 	// These steps depend on each other, so we won't use t.Run() here.
+// 	mrb := ringbuffer.NewMultiReaderBuf[int](4, 3)
+// 	initialCount := mrb.LenReaders()
+// 	if initialCount != 3 {
+// 		t.Errorf("Expected 3 readers, got %d", initialCount)
+// 	}
+
+// 	err := mrb.CloseReader(1)
+// 	if err != nil {
+// 		t.Errorf("Unexpected error closing reader 1: %v", err)
+// 	}
+
+// 	afterCloseCount := mrb.LenReaders()
+// 	if afterCloseCount != 2 {
+// 		t.Errorf("Expected 2 readers after closing one, got %d", afterCloseCount)
+// 	}
+// }
