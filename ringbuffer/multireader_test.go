@@ -585,3 +585,56 @@ func TestMultiReaderBuf_ReaderConsumeFirst(t *testing.T) {
 
 	_, _ = mrb.ReaderConsumeFirst(2) // Invalid ID
 }
+
+func TestMultiReaderBuf_ReaderToSlice(t *testing.T) {
+	t.Parallel()
+
+	t.Run("EmptyReaderToSlice", func(t *testing.T) {
+		t.Parallel()
+
+		mrb := ringbuffer.NewMultiReaderBuf[int](4, 2)
+		sliceEmpty := mrb.ReaderToSlice(0)
+
+		if len(sliceEmpty) != 0 {
+			t.Errorf("Expected empty slice for empty reader, got %v", sliceEmpty)
+		}
+	})
+
+	t.Run("NonEmptyReaderToSlice", func(t *testing.T) {
+		t.Parallel()
+
+		mrb := ringbuffer.NewMultiReaderBuf[int](4, 2)
+
+		mrb.Append(10)
+		mrb.Append(20)
+		mrb.Append(30)
+
+		slice := mrb.ReaderToSlice(0)
+		if len(slice) != 3 || slice[0] != 10 || slice[1] != 20 || slice[2] != 30 {
+			t.Errorf("Expected [10,20,30], got %v", slice)
+		}
+
+		// Consume one element
+		_, _ = mrb.ReaderConsumeFirst(0)
+		sliceAfter := mrb.ReaderToSlice(0)
+
+		if len(sliceAfter) != 2 || sliceAfter[0] != 20 {
+			t.Errorf("Expected [20,30] after consume, got %v", sliceAfter)
+		}
+	})
+
+	t.Run("InvalidReaderIDShouldPanic", func(t *testing.T) {
+		t.Parallel()
+
+		mrb := ringbuffer.NewMultiReaderBuf[int](4, 2)
+
+		defer func() {
+			if r := recover(); r == nil {
+				t.Errorf("Expected panic for invalid reader ID, got none")
+			} else if r != "Negative readerID (-1) not allowed" {
+				t.Errorf("Got panic \"%v\" when \"Negative readerID (-1) not allowed\" expected", r)
+			}
+		}()
+		mrb.ReaderToSlice(-1)
+	})
+}

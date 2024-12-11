@@ -222,7 +222,16 @@ func (mrb *MultiReaderBuf[T]) ReaderLen(readerID int) int {
 	return mrb.internalReaderLen(readerID)
 }
 
-// func (mrb *MultiReaderBuf[T]) ReaderToSlice(readerID int) []T
+// ReaderToSlice converts the Buffer into a slice from the POV of reader readerID.
+//
+// Returns:
+//   - A []T containing all elements reader readerID can see in the buffer.
+func (mrb *MultiReaderBuf[T]) ReaderToSlice(readerID int) []T {
+	mrb.mu.RLock()
+	defer mrb.mu.RUnlock()
+
+	return mrb.internalReaderToSlice(readerID)
+}
 
 // ReaderToMap converts the Buffer into a map from the POV of reader readerID.
 //
@@ -403,6 +412,10 @@ func (mrb *MultiReaderBuf[T]) internalReaderLen(readerID int) int {
 }
 
 func (mrb *MultiReaderBuf[T]) internalReaderToSlice(readerID int) []T {
+	if !mrb.internalIsReaderValid(readerID) {
+		return nil
+	}
+
 	localOffset := mrb.readers[readerID].offset - mrb.data.RangeFirst()
 	resultSuperset := mrb.data.ToSlice()
 
