@@ -28,19 +28,22 @@ The `stream` library is meant to offer a Go-native “streaming solution”:
 **Mapping and Filtering:**
 
 ```go
+var result []string
+
 data := []int{1, 2, 3, 4, 5}
 source := NewSliceSource(data)
 
-mapper := NewMap(source, func(n int) int { return n * n })        // Square each number
-filter := NewFilter(mapper, func(n int) bool { return n%2 == 0 }) // Keep even numbers
+squareMapper := NewMapper(source, func(n int) int { return n * n })     // Square each number
+filter := NewFilter(squareMapper, func(n int) bool { return n%2 == 0 }) // Keep even numbers
+toStrMapper := NewMapper(filter, strconv.Itoa)                          // Convert to string
+sink := NewSliceSink(&result)
 
-for {
-    value, err := filter.Pull(Blocking)
-    if errors.Is(err, ErrEndOfData) {
-        break
-    }
-    fmt.Println(value) // Output: 4, 16
+outResult, err := sink.Append(toStrMapper)
+if err != nil {
+    return // Fail
 }
+
+fmt.Println(strings.Join(*outResult, ", ")) // Output: 4, 16
 ```
 
 **Reducing:**
@@ -48,12 +51,8 @@ for {
 ```go
 data := []int{1, 2, 3, 4, 5}
 source := NewSliceSource(data)
-
-reducer := func(acc, next int) int { return acc + next } // Summation
-finalizer := func(acc int) int { return acc }
-consumer := NewReducer(0, reducer, finalizer)
-
-result, _ := consumer.Consume(source)
+reducer := NewReducer(0, func(acc, next int) int { return acc + next })
+result, _ := reducer.Reduce(source)
 fmt.Println(result) // Output: 15
 ```
 
@@ -66,5 +65,5 @@ This project is still under active development:
 
 ## Contributing
 
-Contributions, suggestions, and feedback are warmly encouraged. If you have thoughts on design clarity, naming, or general direction, feel free to open an issue
+Contributions, suggestions, and feedback are warmly encouraged. If you have thoughts on design clarity, naming, or general direction, feel free to open an issue.
 

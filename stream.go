@@ -22,31 +22,31 @@
 //
 // Example 1: Mapping and Filtering
 //
-//	data := []int{1, 2, 3, 4, 5}
-//	source := NewSliceSource(data)
+// var result []string
 //
-//	mapper := NewMap(source, func(n int) int { return n * n }) // Square each number
-//	filter := NewFilter(mapper, func(n int) bool { return n%2 == 0 }) // Keep even numbers
+// data := []int{1, 2, 3, 4, 5}
+// source := NewSliceSource(data)
 //
-//	for {
-//	    value, err := filter.Pull(Blocking)
-//	    if errors.Is(err, ErrEndOfData) {
-//	        break
-//	    }
-//	    fmt.Println(value) // Output: 4, 16
+// squareMapper := NewMapper(source, func(n int) int { return n * n })     // Square each number
+// filter := NewFilter(squareMapper, func(n int) bool { return n%2 == 0 }) // Keep even numbers
+// toStrMapper := NewMapper(filter, strconv.Itoa)                          // Convert to string
+// sink := NewSliceSink(&result)
+//
+// outResult, err := sink.Append(toStrMapper)
+//
+//	if err != nil {
+//		return // Fail
 //	}
+//
+// fmt.Println(strings.Join(*outResult, ", ")) // Output: 4, 16
 //
 // Example 2: Reducing
 //
-//	data := []int{1, 2, 3, 4, 5}
-//	source := NewSliceSource(data)
-//
-//	reducer := func(acc, next int) int { return acc + next } // Summing reducer
-//	finalizer := func(acc int) int { return acc }
-//	consumer := NewReducer(0, reducer, finalizer)
-//
-//	result, _ := consumer.Consume(source)
-//	fmt.Println(result) // Output: 15
+// data := []int{1, 2, 3, 4, 5}
+// source := NewSliceSource(data)
+// reducer := NewReducer(0, func(acc, next int) int { return acc + next })
+// result, _ := reducer.Reduce(source)
+// fmt.Println(result) // Output: 15
 package stream
 
 import (
@@ -81,7 +81,7 @@ type Source[T any] interface {
 	Close()                              // Lets the consumer tell the source that no more data will be Pull()ed.
 }
 
-// SliceSink is simple way to capture the result of a source into a slice.
+// sourceFunc is simple way to turn a lambda into a Source.
 type sourceFunc[T any] struct {
 	srcFunc   func(BlockingType) (*T, error)
 	closeFunc func()
