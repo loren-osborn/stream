@@ -2,6 +2,7 @@ package ringbuffer_test
 
 import (
 	"reflect"
+	"sync"
 	"testing"
 
 	//nolint:depguard // package under test.
@@ -287,202 +288,176 @@ func TestMultiReaderBuf_Range_EarlyExit(t *testing.T) {
 	}
 }
 
-// //nolint: funlen // *FIXME*
-// func TestMultiReaderBuf_ConcurrentAccess(t *testing.T) {
-// 	t.Parallel()
+//nolint: funlen,gocognit // *FIXME*
+func TestMultiReaderBuf_ConcurrentAccess(t *testing.T) {
+	t.Parallel()
 
-// 	ringBuf := ringbuffer.New[int](0)
-// 	someFunc := func(in int) int { return in*3 + 7 }
+	ringBuf := ringbuffer.NewMultiReaderBuf[int](0, 5)
+	someFunc := func(in int) int { return in*3 + 7 }
 
-// 	var waitGrp sync.WaitGroup
+	var waitGrp sync.WaitGroup
 
-// 	// Writer goroutine
-// 	waitGrp.Add(1)
+	// Writer goroutine
+	waitGrp.Add(1)
 
-// 	go func() {
-// 		defer waitGrp.Done()
+	go func() {
+		defer waitGrp.Done()
 
-// 		dueToDiscard := 0
-// 		nextDiscardGroup := 1
+		for i := range 1000 {
+			for j := range 2 {
+				index := i*2 + j
+				writeIndex := ringBuf.Append(someFunc(index))
 
-// 		for i := range 1000 {
-// 			for j := range 2 {
-// 				index := i*2 + j
-// 				writeIndex := ringBuf.Append(someFunc(index))
+				if writeIndex != index {
+					t.Errorf("Unexpected write index %d when %d expected", writeIndex, index)
+				}
+			}
+		}
+	}()
 
-// 				if writeIndex != index {
-// 					t.Errorf("Unexpected write index %d when %d expected", writeIndex, index)
-// 				}
+	for readerID := range 5 {
+		// Reader goroutine
+		waitGrp.Add(1)
 
-// 				if val := ringBuf.At(writeIndex); val != someFunc(index) {
-// 					t.Errorf("Unexpected value %d when %d expected", val, someFunc(index))
-// 				}
-// 			}
+		go func(rID int) {
+			defer waitGrp.Done()
 
-// 			dueToDiscard++
+			firstIdx := 0
 
-// 			if dueToDiscard >= nextDiscardGroup {
-// 				ringBuf.Discard(nextDiscardGroup)
+			for iteration := range 1000 {
+				lastIndex := firstIdx - 1
 
-// 				dueToDiscard -= nextDiscardGroup
+				ringBuf.ReaderRange(rID, func(index int, readVal int) bool {
+					if index != lastIndex+1 {
+						t.Errorf("Indices out of order: %d followed by %d", lastIndex, index)
+					}
 
-// 				nextDiscardGroup++
-// 			}
-// 		}
-// 	}()
+					if computed := someFunc(index); readVal != computed {
+						t.Errorf("Unanticipated value: %d when %d expected", readVal, computed)
+					}
 
-// 	// Reader goroutine
-// 	waitGrp.Add(1)
+					// Just going modulo a bunch of primes to make this uncommon:
+					if (iteration%7 == 0) && ((index+2*rID)%29 == 0) {
+						maxToDiscard := 1 + ((index + 3*rID) % 5)
+						if ringBuf.ReaderLen(rID) < maxToDiscard {
+							maxToDiscard = ringBuf.ReaderLen(rID) / 2
+						}
 
-// 	go func() {
-// 		defer waitGrp.Done()
+						firstIdx += maxToDiscard
+						ringBuf.ReaderDiscard(rID, maxToDiscard)
+					}
 
-// 		for range 1000 {
-// 			lastIndex := -1
+					lastIndex = index
 
-// 			ringBuf.Range(func(index int, readVal int) bool {
-// 				if index <= lastIndex {
-// 					t.Errorf("Indices out of order: %d followed by %d", lastIndex, index)
-// 				}
+					return true
+				})
+			}
+		}(readerID)
+	}
 
-// 				if computed := someFunc(index); readVal != computed {
-// 					t.Errorf("Unanticipated value: %d when %d expected", readVal, computed)
-// 				}
+	waitGrp.Wait()
+}
 
-// 				lastIndex = index
+func TestMultiReaderBuf_DiscardInvalidCount(t *testing.T) {
+	t.Parallel()
 
-// 				return true
-// 			})
-// 		}
-// 	}()
+	defer func() {
+		if r := recover(); r == nil {
+			t.Errorf("Expected panic, got none")
+		} else if r != "Attempted to remove 2 elements when only 1 visible" {
+			t.Errorf("Got panic \"%v\" when \"Attempted to remove 2 elements when only 1 visible\" expected", r)
+		}
+	}()
 
-// 	waitGrp.Wait()
-// }
+	rb := ringbuffer.NewMultiReaderBuf[int](0, 1)
+	rb.Append(1)
+	rb.ReaderDiscard(0, 2) // Should panic because only one element exists
+}
 
-// func TestMultiReaderBuf_DiscardInvalidCount(t *testing.T) {
-// 	t.Parallel()
+func TestMultiReaderBuf_ResizeInvalidCapacity(t *testing.T) {
+	t.Parallel()
 
-// 	defer func() {
-// 		if r := recover(); r == nil {
-// 			t.Errorf("Expected panic, got none")
-// 		} else if r != "Attempted to remove 2 elements when only 1 present" {
-// 			t.Errorf("Got panic \"%v\" when \"Attempted to remove 2 elements when only 1 present\" expected", r)
-// 		}
-// 	}()
+	defer func() {
+		if r := recover(); r == nil {
+			t.Errorf("Expected panic, got none")
+		} else if r != "Attempted to resize to 1 elements (not big enough to hold 2 elements)" {
+			t.Errorf("Got panic \"%v\" when \"Attempted to resize to 1 elements (not big enough "+
+				"to hold 2 elements)\" expected", r)
+		}
+	}()
 
-// 	rb := ringbuffer.New[int](0)
-// 	rb.Append(1)
-// 	rb.Discard(2) // Should panic because only one element exists
-// }
+	rb := ringbuffer.NewMultiReaderBuf[int](0, 1)
+	rb.Append(1)
+	rb.Append(2)
+	rb.Resize(1) // Should panic because size is 2
+}
 
-// func TestMultiReaderBuf_ResizeInvalidCapacity(t *testing.T) {
-// 	t.Parallel()
+func TestMultiReaderBuf_Range_PanicHandling(t *testing.T) {
+	t.Parallel()
 
-// 	defer func() {
-// 		if r := recover(); r == nil {
-// 			t.Errorf("Expected panic, got none")
-// 		} else if r != "Attempted to resize to 1 elements (not big enough to hold 2 elements)" {
-// 			t.Errorf("Got panic \"%v\" when \"Attempted to resize to 1 elements (not big enough "+
-// 				"to hold 2 elements)\" expected", r)
-// 		}
-// 	}()
+	ringBuf := ringbuffer.NewMultiReaderBuf[int](1, 1)
 
-// 	rb := ringbuffer.New[int](0)
-// 	rb.Append(1)
-// 	rb.Append(2)
-// 	rb.Resize(1) // Should panic because size is 2
-// }
+	// Simulate a panic during iteration
+	ringBuf.ReaderRange(0, func(_ int, _ int) bool {
+		panic("empty buffer... no iterations... no panic!")
+	})
 
-// func TestMultiReaderBuf_Range_PanicHandling(t *testing.T) {
-// 	t.Parallel()
+	ringBuf.Append(2)
+	ringBuf.Append(3)
 
-// 	ringBuf := ringbuffer.New[int](1)
+	defer func() {
+		if r := recover(); r == nil {
+			t.Errorf("Expected panic, but no panic occurred")
+		} else if r != "simulated panic" {
+			t.Errorf("Got panic \"%v\" when \"simulated panic\" expected", r)
+		}
+	}()
 
-// 	// Simulate a panic during iteration
-// 	ringBuf.Range(func(_ int, _ int) bool {
-// 		panic("empty buffer... no iterations... no panic!")
-// 	})
+	// Simulate a panic during iteration
+	ringBuf.ReaderRange(0, func(_ int, _ int) bool {
+		panic("simulated panic")
+	})
+}
 
-// 	ringBuf.Append(2)
-// 	ringBuf.Append(3)
+func TestMultiReaderBuf_NegInitialSize_PanicHandling(t *testing.T) {
+	t.Parallel()
 
-// 	defer func() {
-// 		if r := recover(); r == nil {
-// 			t.Errorf("Expected panic, but no panic occurred")
-// 		} else if r != "simulated panic" {
-// 			t.Errorf("Got panic \"%v\" when \"simulated panic\" expected", r)
-// 		}
-// 	}()
+	defer func() {
+		if r := recover(); r == nil {
+			t.Errorf("Expected panic, but no panic occurred")
+		} else if r != "capacity must be greater than zero" {
+			t.Errorf("Got panic \"%v\" when \"capacity must be greater than zero\" expected", r)
+		}
+	}()
 
-// 	// Simulate a panic during iteration
-// 	ringBuf.Range(func(_ int, _ int) bool {
-// 		panic("simulated panic")
-// 	})
-// }
+	ringbuffer.NewMultiReaderBuf[int](-1, 1)
+}
 
-// func TestMultiReaderBuf_NegInitialSize_PanicHandling(t *testing.T) {
-// 	t.Parallel()
+func TestMultiReaderBuf_IndexAfter_PanicHandling(t *testing.T) {
+	t.Parallel()
 
-// 	defer func() {
-// 		if r := recover(); r == nil {
-// 			t.Errorf("Expected panic, but no panic occurred")
-// 		} else if r != "capacity must be greater than zero" {
-// 			t.Errorf("Got panic \"%v\" when \"capacity must be greater than zero\" expected", r)
-// 		}
-// 	}()
+	ringBuf := ringbuffer.NewMultiReaderBuf[int](0, 1)
 
-// 	ringbuffer.New[int](-1)
-// }
+	ringBuf.Append(10)
+	ringBuf.Append(20)
+	ringBuf.Append(30)
+	ringBuf.Append(40)
+	ringBuf.Append(50)
+	ringBuf.ReaderDiscard(0, 2)
 
-// func TestMultiReaderBuf_IndexBefore_PanicHandling(t *testing.T) {
-// 	t.Parallel()
+	rangeLen := ringBuf.ReaderRangeLen(0)
+	if rangeLen != 5 {
+		t.Errorf("Exprected RangeLen() == 5 got %d", rangeLen)
+	}
 
-// 	ringBuf := ringbuffer.New[int](0)
+	defer func() {
+		if r := recover(); r == nil {
+			t.Errorf("Expected panic, but no panic occurred")
+		} else if r != "Attempted to access index 5 after final index 4" {
+			t.Errorf("Got panic \"%v\" when \"Attempted to access index 5 after final index 4\" expected", r)
+		}
+	}()
 
-// 	ringBuf.Append(10)
-// 	ringBuf.Append(20)
-// 	ringBuf.Append(30)
-// 	ringBuf.Append(40)
-// 	ringBuf.Append(50)
-// 	ringBuf.Discard(2)
-
-// 	defer func() {
-// 		if r := recover(); r == nil {
-// 			t.Errorf("Expected panic, but no panic occurred")
-// 		} else if r != "Attempted to access index 1 before initial index 2" {
-// 			t.Errorf("Got panic \"%v\" when \"Attempted to access index 1 before initial index 2\" expected", r)
-// 		}
-// 	}()
-
-// 	// Panic attempting to set discarded element
-// 	ringBuf.Set(1, 200)
-// }
-
-// func TestMultiReaderBuf_IndexAfter_PanicHandling(t *testing.T) {
-// 	t.Parallel()
-
-// 	ringBuf := ringbuffer.New[int](0)
-
-// 	ringBuf.Append(10)
-// 	ringBuf.Append(20)
-// 	ringBuf.Append(30)
-// 	ringBuf.Append(40)
-// 	ringBuf.Append(50)
-// 	ringBuf.Discard(2)
-
-// 	rangeLen := ringBuf.RangeLen()
-// 	if rangeLen != 5 {
-// 		t.Errorf("Exprected RangeLen() == 5 got %d", rangeLen)
-// 	}
-
-// 	defer func() {
-// 		if r := recover(); r == nil {
-// 			t.Errorf("Expected panic, but no panic occurred")
-// 		} else if r != "Attempted to access index 5 after final index 4" {
-// 			t.Errorf("Got panic \"%v\" when \"Attempted to access index 5 after final index 4\" expected", r)
-// 		}
-// 	}()
-
-// 	// Panic attempting to set discarded element
-// 	ringBuf.Set(rangeLen, 60)
-// }
+	// Panic attempting to set discarded element
+	_ = ringBuf.ReaderAt(0, rangeLen)
+}

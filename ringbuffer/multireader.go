@@ -82,7 +82,37 @@ func (mrb *MultiReaderBuf[T]) Resize(newLen int) {
 // // Reader methods
 // func (mrb *MultiReaderBuf[T]) ReaderPeekFirst(readerID int) (*T, error)
 // func (mrb *MultiReaderBuf[T]) ReaderConsumeFirst(readerID int) (*T, error)
-// func (mrb *MultiReaderBuf[T]) ReaderAt(readerID int, index int) T
+
+// ReaderAt retrieves the value at a specific absolute index from the POV of reader readerID.
+//
+// Parameters:
+// - readerID: The reader corresponding to our perspective.
+// - index: The absolute index of the element.
+//
+// Returns:
+// - The value at the specified index.
+//
+// Panics:
+// - If the index is out of bounds (less than RangeFirst() or greater than or equal to RangeLen()).
+func (mrb *MultiReaderBuf[T]) ReaderAt(readerID int, index int) T {
+	mrb.mu.RLock()
+	defer mrb.mu.RUnlock()
+
+	if !mrb.internalIsReaderValid(readerID) {
+		panic("Can't read from a non-existent reader")
+	}
+
+	if index < mrb.readers[readerID].offset {
+		panic(fmt.Sprintf("Attempted to access index %d before initial index %d", index, mrb.readers[readerID].offset))
+	}
+
+	// This is a duplicate check, but here for completeness
+	if index < mrb.data.RangeLen() {
+		panic(fmt.Sprintf("Attempted to access index %d after final index %d", index, mrb.data.RangeLen()-1))
+	}
+
+	return mrb.data.At(index)
+}
 
 // ReaderDiscard discards a given number of elements for the POV of reader readerID.
 func (mrb *MultiReaderBuf[T]) ReaderDiscard(readerID int, count int) {
@@ -97,10 +127,24 @@ func (mrb *MultiReaderBuf[T]) ReaderRangeFirst(readerID int) int {
 	mrb.mu.RLock()
 	defer mrb.mu.RUnlock()
 
+	if !mrb.internalIsReaderValid(readerID) {
+		// off end:
+		return mrb.data.RangeLen()
+	}
+
 	return mrb.readers[readerID].offset
 }
 
-// func (mrb *MultiReaderBuf[T]) ReaderRangeLen(readerID int) int
+// ReaderRangeLen returns the absolute index just past the last valid element in
+// the buffer from the POV of reader readerID.
+func (mrb *MultiReaderBuf[T]) ReaderRangeLen(readerID int) int {
+	mrb.mu.RLock()
+	defer mrb.mu.RUnlock()
+
+	_ = mrb.internalIsReaderValid(readerID)
+
+	return mrb.data.RangeLen()
+}
 
 // ReaderRange ranges over the ring buffer from the POV of reader readerID.
 func (mrb *MultiReaderBuf[T]) ReaderRange(readerID int, yeildFunc func(index int, value T) bool) {
@@ -108,13 +152,25 @@ func (mrb *MultiReaderBuf[T]) ReaderRange(readerID int, yeildFunc func(index int
 
 	var startIndex int
 
+	var valid bool
+
 	func() { // Use an anonymous function to ensure defer unlocks the mutex
 		mrb.mu.RLock()
 		defer mrb.mu.RUnlock()
 
+		valid = mrb.internalIsReaderValid(readerID)
+
+		if !valid {
+			return
+		}
+
 		data = mrb.internalReaderToSlice(readerID) // Create a local copy of the data
 		startIndex = mrb.readers[readerID].offset  // Capture the starting absolute index
 	}()
+
+	if !valid {
+		return
+	}
 
 	mrb.internalRange(yeildFunc, data, startIndex)
 }
@@ -149,6 +205,10 @@ func (mrb *MultiReaderBuf[T]) GetReader(readerID int) *Reader[T] {
 	mrb.mu.RLock()
 	defer mrb.mu.RUnlock()
 
+	// This will only return false when mrb.readers[readerID] is nil,
+	// which is what we want to return for a (non-panicing) invalid reader:
+	_ = mrb.internalIsReaderValid(readerID)
+
 	return mrb.readers[readerID]
 }
 
@@ -180,6 +240,7 @@ func (mrb *MultiReaderBuf[T]) RangeReaders(yeildFunc func(readerID int, reader *
 
 // ID returns the reader's readerID.
 func (r *Reader[T]) ID() int {
+	// This will already panic on a nil owner
 	r.owner.mu.RLock()
 	defer r.owner.mu.RUnlock()
 
@@ -238,7 +299,67 @@ func (r *Reader[T]) ToMap() map[int]T {
 	return r.owner.internalReaderToMap(r.readerID)
 }
 
+// We panic on range error and data inconsistency, and return false on other errors.
+func (mrb *MultiReaderBuf[T]) internalIsReaderValid(readerID int) bool {
+	if readerID < 0 {
+		panic(fmt.Sprintf("Negative readerID (%d) not allowed", readerID))
+	}
+
+	if readerID >= len(mrb.readers) {
+		panic(fmt.Sprintf(
+			"Attempting to use readerID %d when only %d readers allocated",
+			readerID,
+			len(mrb.readers),
+		))
+	}
+
+	if mrb.readers[readerID] == nil {
+		return false
+	}
+
+	if mrb.readers[readerID].owner != mrb {
+		panic(fmt.Sprintf(
+			"INTERNAL ERROR: reader has bad owner %v, expected %v",
+			mrb.readers[readerID].owner,
+			mrb,
+		))
+	}
+
+	if mrb.readers[readerID].readerID != readerID {
+		panic(fmt.Sprintf(
+			"INTERNAL ERROR: reader %d has bad readerID %d",
+			readerID,
+			mrb.readers[readerID].readerID,
+		))
+	}
+
+	if mrb.readers[readerID].offset > mrb.data.RangeLen() {
+		panic(fmt.Sprintf(
+			"INTERNAL ERROR: reader %d off end of ring buffer at index %d (max %d)",
+			readerID,
+			mrb.readers[readerID].offset,
+			mrb.data.RangeLen(),
+		))
+	}
+
+	if mrb.readers[readerID].offset < mrb.data.RangeFirst() {
+		panic(fmt.Sprintf(
+			"INTERNAL ERROR: reader %d off beginning of ring buffer at index %d (min %d)",
+			readerID,
+			mrb.readers[readerID].offset,
+			mrb.data.RangeFirst(),
+		))
+	}
+
+	return true
+}
+
 func (mrb *MultiReaderBuf[T]) internalReaderLen(readerID int) int {
+	if !mrb.internalIsReaderValid(readerID) {
+		// empty:
+		return 0
+	}
+
 	return mrb.data.RangeLen() - mrb.readers[readerID].offset
 }
 
@@ -250,6 +371,10 @@ func (mrb *MultiReaderBuf[T]) internalReaderToSlice(readerID int) []T {
 }
 
 func (mrb *MultiReaderBuf[T]) internalReaderDiscard(readerID int, count int) {
+	if !mrb.internalIsReaderValid(readerID) {
+		panic("Can't discard from a non-existent reader")
+	}
+
 	if localSize := mrb.internalReaderLen(readerID); count > localSize {
 		panic(fmt.Sprintf("Attempted to remove %d elements when only %d visible", count, localSize))
 	}
@@ -276,6 +401,10 @@ func (mrb *MultiReaderBuf[T]) internalReaderDiscard(readerID int, count int) {
 }
 
 func (mrb *MultiReaderBuf[T]) internalReaderToMap(readerID int) map[int]T {
+	if !mrb.internalIsReaderValid(readerID) {
+		return nil
+	}
+
 	asSlice := mrb.internalReaderToSlice(readerID)
 	result := make(map[int]T, mrb.internalReaderLen(readerID))
 	startIndex := mrb.readers[readerID].offset
