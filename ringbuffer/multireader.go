@@ -447,7 +447,13 @@ func (r *Reader[T]) Len() int {
 	return r.owner.internalReaderLen(r.readerID)
 }
 
-// func (r *Reader[T]) ToSlice() []T
+// ToSlice converts the Buffer into a slice from the POV of reader readerID.
+//
+// Returns:
+//   - A []T containing all elements reader readerID can see in the buffer.
+func (r *Reader[T]) ToSlice() []T {
+	return r.owner.ReaderToSlice(r.readerID)
+}
 
 // ToMap converts the Buffer into a map from the POV of the reader.
 //

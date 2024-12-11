@@ -822,3 +822,42 @@ func TestReader_At(t *testing.T) {
 	}()
 	reader.At(reader.RangeLen()) // out of range
 }
+
+func TestReader_ToSlice(t *testing.T) {
+	t.Parallel()
+
+	t.Run("EmptyReaderToSlice", func(t *testing.T) {
+		t.Parallel()
+
+		mrb := ringbuffer.NewMultiReaderBuf[int](4, 1)
+		r := mrb.GetReader(0)
+		emptySlice := r.ToSlice()
+
+		if len(emptySlice) != 0 {
+			t.Errorf("Expected empty slice, got %v", emptySlice)
+		}
+	})
+
+	t.Run("NonEmptyReaderToSlice", func(t *testing.T) {
+		t.Parallel()
+
+		mrb := ringbuffer.NewMultiReaderBuf[int](4, 1)
+		reader := mrb.GetReader(0)
+
+		mrb.Append(100)
+		mrb.Append(200)
+		mrb.Append(300)
+
+		s := reader.ToSlice()
+		if len(s) != 3 || s[0] != 100 || s[1] != 200 || s[2] != 300 {
+			t.Errorf("Expected [100,200,300], got %v", s)
+		}
+
+		_, _ = reader.ConsumeFirst()
+
+		s2 := reader.ToSlice()
+		if len(s2) != 2 || s2[0] != 200 {
+			t.Errorf("After consume, expected [200,300], got %v", s2)
+		}
+	})
+}
