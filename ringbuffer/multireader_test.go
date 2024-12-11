@@ -722,3 +722,103 @@ func TestMultiReaderBuf_LenReaders(t *testing.T) {
 		t.Errorf("Expected 3 reader slots after closing one, got %d", afterRangeCount)
 	}
 }
+
+func TestReader_PeekFirst(t *testing.T) {
+	t.Parallel()
+
+	t.Run("PeekEmptyReaderShouldError", func(t *testing.T) {
+		t.Parallel()
+
+		mrb := ringbuffer.NewMultiReaderBuf[int](4, 1)
+		r := mrb.GetReader(0)
+
+		_, err := r.PeekFirst()
+
+		if err == nil {
+			t.Errorf("Expected error peeking empty reader, got nil")
+		}
+	})
+
+	t.Run("PeekNonEmptyReader", func(t *testing.T) {
+		t.Parallel()
+
+		mrb := ringbuffer.NewMultiReaderBuf[int](4, 1)
+		r := mrb.GetReader(0)
+
+		mrb.Append(10)
+
+		val, err := r.PeekFirst()
+
+		if err != nil || val == nil || *val != 10 {
+			t.Errorf("Expected 10, got %v (err: %v)", val, err)
+		}
+	})
+}
+
+func TestReader_ConsumeFirst(t *testing.T) {
+	t.Parallel()
+
+	t.Run("ConsumeFromEmptyReaderShouldError", func(t *testing.T) {
+		t.Parallel()
+
+		mrb := ringbuffer.NewMultiReaderBuf[int](4, 1)
+		r := mrb.GetReader(0)
+		_, err := r.ConsumeFirst()
+
+		if err == nil {
+			t.Errorf("Expected error consuming empty reader, got nil")
+		}
+	})
+
+	t.Run("ConsumeSequentially", func(t *testing.T) {
+		t.Parallel()
+
+		mrb := ringbuffer.NewMultiReaderBuf[int](4, 1)
+		reader := mrb.GetReader(0)
+
+		mrb.Append(5)
+		mrb.Append(6)
+
+		val, err := reader.ConsumeFirst()
+		if err != nil || val == nil || *val != 5 {
+			t.Errorf("Expected 5, got %v (err: %v)", val, err)
+		}
+
+		val, err = reader.ConsumeFirst()
+		if err != nil || val == nil || *val != 6 {
+			t.Errorf("Expected 6, got %v (err: %v)", val, err)
+		}
+
+		_, err = reader.ConsumeFirst()
+		if err == nil {
+			t.Errorf("Expected error consuming empty reader, got nil")
+		}
+	})
+}
+
+func TestReader_At(t *testing.T) {
+	t.Parallel()
+
+	// Dependencies and single scenario, no parallel sub-tests here.
+	mrb := ringbuffer.NewMultiReaderBuf[int](4, 1)
+	reader := mrb.GetReader(0)
+
+	mrb.Append(10)
+	mrb.Append(11)
+	mrb.Append(12)
+
+	if v := reader.At(reader.RangeFirst()); v != 10 {
+		t.Errorf("Expected At(RangeFirst()) = 10, got %d", v)
+	}
+
+	if v := reader.At(reader.RangeFirst() + 2); v != 12 {
+		t.Errorf("Expected At(RangeFirst()+2)=12, got %d", v)
+	}
+
+	defer func() {
+		if rec := recover(); rec == nil {
+			t.Errorf("Expected panic accessing out-of-range element")
+		}
+	}()
+	reader.At(reader.RangeLen()) // out of range
+}

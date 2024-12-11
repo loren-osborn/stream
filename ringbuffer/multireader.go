@@ -158,7 +158,7 @@ func (mrb *MultiReaderBuf[T]) ReaderAt(readerID int, index int) T {
 	}
 
 	// This is a duplicate check, but here for completeness
-	if index < mrb.data.RangeLen() {
+	if index >= mrb.data.RangeLen() {
 		panic(fmt.Sprintf("Attempted to access index %d after final index %d", index, mrb.data.RangeLen()-1))
 	}
 
@@ -364,8 +364,18 @@ func (mrb *MultiReaderBuf[T]) RangeLenReaders() int {
 }
 
 // // Reader proxy methods
-// func (r *Reader[T]) PeekFirst() (*T, error)
-// func (r *Reader[T]) ConsumeFirst() (*T, error)
+
+// PeekFirst returns a pointer to the first element from the POV of reader,
+// leaving it in place.
+func (r *Reader[T]) PeekFirst() (*T, error) {
+	return r.owner.ReaderPeekFirst(r.readerID)
+}
+
+// ConsumeFirst returns a pointer to the first element from the POV of reader,
+// removing it from visibility.
+func (r *Reader[T]) ConsumeFirst() (*T, error) {
+	return r.owner.ReaderConsumeFirst(r.readerID)
+}
 
 // ID returns the reader's readerID.
 func (r *Reader[T]) ID() int {
@@ -376,7 +386,22 @@ func (r *Reader[T]) ID() int {
 	return r.readerID
 }
 
-// func (r *Reader[T]) At(index int) T.
+//
+
+// At retrieves the value at a specific absolute index from the POV of reader.
+//
+// Parameters:
+// - readerID: The reader corresponding to our perspective.
+// - index: The absolute index of the element.
+//
+// Returns:
+// - The value at the specified index.
+//
+// Panics:
+// - If the index is out of bounds (less than RangeFirst() or greater than or equal to RangeLen()).
+func (r *Reader[T]) At(index int) T {
+	return r.owner.ReaderAt(r.readerID, index)
+}
 
 // Discard discards a given number of elements for the POV of reader.
 func (r *Reader[T]) Discard(count int) {
@@ -386,8 +411,16 @@ func (r *Reader[T]) Discard(count int) {
 	r.owner.internalReaderDiscard(r.readerID, count)
 }
 
-// func (r *Reader[T]) RangeFirst() int
-// func (r *Reader[T]) RangeLen() int
+// RangeFirst gives the index of the first element from the POV of reader.
+func (r *Reader[T]) RangeFirst() int {
+	return r.owner.ReaderRangeFirst(r.readerID)
+}
+
+// RangeLen returns the absolute index just past the last valid element in
+// the buffer from the POV of reader.
+func (r *Reader[T]) RangeLen() int {
+	return r.owner.ReaderRangeLen(r.readerID)
+}
 
 // Range ranges over the ring buffer from the POV of the reader.
 func (r *Reader[T]) Range(yeildFunc func(index int, value T) bool) {
