@@ -861,3 +861,36 @@ func TestReader_ToSlice(t *testing.T) {
 		}
 	})
 }
+
+func TestMultiReaderBuf_ErrorConditions(t *testing.T) {
+	t.Parallel()
+
+	t.Run("PeekFirstOnClosedReader", func(t *testing.T) {
+		t.Parallel()
+
+		mrb := ringbuffer.NewMultiReaderBuf[int](4, 2)
+		mrb.CloseReader(1)
+
+		_, err := mrb.ReaderPeekFirst(1)
+		if err == nil {
+			t.Errorf("Expected error peeking closed reader")
+		}
+	})
+
+	t.Run("ConsumeFirstOnClosedReader", func(t *testing.T) {
+		t.Parallel()
+
+		mrb := ringbuffer.NewMultiReaderBuf[int](4, 2)
+		mrb.CloseReader(1)
+
+		defer func() {
+			if r := recover(); r == nil {
+				t.Errorf("Expected panic for invalid reader ID, got none")
+			} else if r != "Can't read from a non-existent reader" {
+				t.Errorf("Got panic \"%v\" when \"Can't read from a non-existent reader\" expected", r)
+			}
+		}()
+
+		_, _ = mrb.ReaderConsumeFirst(1)
+	})
+}
