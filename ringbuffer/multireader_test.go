@@ -1193,3 +1193,106 @@ func TestMultiReaderBuf_CloseReaderWithLowerRangeFirst(t *testing.T) {
 		}
 	}
 }
+
+func TestMultiReaderBuf_ReaderToMap_ClosedReader(t *testing.T) {
+	t.Parallel()
+
+	mrb := ringbuffer.NewMultiReaderBuf[int](4, 2)
+	mrb.Append(10)
+	mrb.Append(20)
+
+	// Close ReaderID 0
+	mrb.CloseReader(0)
+
+	// Call ReaderToMap on the closed reader
+	result := mrb.ReaderToMap(0)
+
+	// Verify the result is nil
+	if result != nil {
+		t.Errorf("Expected nil map for closed reader, got %v", result)
+	}
+}
+
+func TestMultiReaderBuf_ReaderToSlice_ClosedReader(t *testing.T) {
+	t.Parallel()
+
+	mrb := ringbuffer.NewMultiReaderBuf[int](4, 2)
+	mrb.Append(10)
+	mrb.Append(20)
+
+	// Close ReaderID 0
+	mrb.CloseReader(0)
+
+	// Call ReaderToSlice on the closed reader
+	result := mrb.ReaderToSlice(0)
+
+	// Verify the result is nil
+	if result != nil {
+		t.Errorf("Expected nil slice for closed reader, got %v", result)
+	}
+}
+
+func TestMultiReaderBuf_Len_ClosedReader(t *testing.T) {
+	t.Parallel()
+
+	mrb := ringbuffer.NewMultiReaderBuf[int](4, 2)
+	mrb.Append(10)
+	mrb.Append(20)
+
+	// Close ReaderID 0
+	mrb.CloseReader(0)
+
+	// Verify Len of the closed reader is 0
+	if length := mrb.ReaderLen(0); length != 0 {
+		t.Errorf("Expected length of closed reader to be 0, got %d", length)
+	}
+
+	// Verify that the open reader has the correct length
+	if length := mrb.ReaderLen(1); length != 2 {
+		t.Errorf("Expected length of open reader to be 2, got %d", length)
+	}
+}
+
+func TestMultiReaderBuf_RangeReaders_HaltIteration(t *testing.T) {
+	t.Parallel()
+
+	mrb := ringbuffer.NewMultiReaderBuf[int](4, 3)
+	mrb.Append(10)
+	mrb.Append(20)
+
+	// Use RangeReaders and halt iteration after the first reader
+	var readersIterated int
+
+	mrb.RangeReaders(func(_ int, _ *ringbuffer.Reader[int]) bool {
+		readersIterated++
+
+		return false // Halt iteration after the first reader
+	})
+
+	// Verify that only one reader was iterated over
+	if readersIterated != 1 {
+		t.Errorf("Expected to iterate over 1 reader, got %d", readersIterated)
+	}
+}
+
+func TestMultiReaderBuf_ReaderDiscard_ClosedReader(t *testing.T) {
+	t.Parallel()
+
+	mrb := ringbuffer.NewMultiReaderBuf[int](4, 2)
+	mrb.Append(10)
+	mrb.Append(20)
+
+	// Close ReaderID 0
+	mrb.CloseReader(0)
+
+	defer func() {
+		if r := recover(); r == nil {
+			t.Errorf("Expected panic calling ReaderDiscard() on a closed reader, got none")
+		} else if r != "Can't discard from a non-existent reader" {
+			t.Errorf("Got unexpected panic message: %v", r)
+		}
+	}()
+
+	// Attempt to discard from the closed reader
+	mrb.ReaderDiscard(0, 1)
+}
