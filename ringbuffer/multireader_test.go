@@ -1,6 +1,8 @@
 package ringbuffer_test
 
 import (
+	"errors"
+	"io"
 	"reflect"
 	"sync"
 	"testing"
@@ -460,4 +462,45 @@ func TestMultiReaderBuf_IndexAfter_PanicHandling(t *testing.T) {
 
 	// Panic attempting to set discarded element
 	_ = ringBuf.ReaderAt(0, rangeLen)
+}
+
+func TestMultiReaderBuf_ReaderPeekFirst(t *testing.T) {
+	t.Parallel()
+
+	mrb := ringbuffer.NewMultiReaderBuf[int](4, 2)
+
+	val, err := mrb.ReaderPeekFirst(0)
+	if err == nil {
+		t.Errorf("Expected error when peeking empty reader, got nil")
+	} else if !errors.Is(err, io.EOF) {
+		t.Errorf("expected error %v, got %v", io.EOF, err)
+	}
+
+	if val != nil {
+		t.Errorf("Expected nil value with error condition, got %v", *val)
+	}
+
+	// Add some values
+	mrb.Append(10)
+	mrb.Append(20)
+	mrb.Append(30)
+
+	val, err = mrb.ReaderPeekFirst(0)
+	if err != nil {
+		t.Errorf("Unexpected error: %v", err)
+	}
+
+	if val == nil || *val != 10 {
+		t.Errorf("Expected first element 10, got %v", val)
+	}
+
+	defer func() {
+		if r := recover(); r == nil {
+			t.Errorf("Expected panic for invalid reader ID, got none")
+		} else if r != "Attempting to use readerID 999 when only 2 readers allocated" {
+			t.Errorf("Got panic \"%v\" when \"Attempting to use readerID 999 when only 2 readers allocated\" expected", r)
+		}
+	}()
+
+	_, _ = mrb.ReaderPeekFirst(999) // Invalid ID
 }

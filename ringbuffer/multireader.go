@@ -2,6 +2,7 @@ package ringbuffer
 
 import (
 	"fmt"
+	"io"
 	"sync"
 )
 
@@ -79,8 +80,26 @@ func (mrb *MultiReaderBuf[T]) Resize(newLen int) {
 	mrb.data.Resize(newLen)
 }
 
-// // Reader methods
-// func (mrb *MultiReaderBuf[T]) ReaderPeekFirst(readerID int) (*T, error)
+// Reader methods
+
+// ReaderPeekFirst returns a pointer to the first element from the POV of reader readerID.
+func (mrb *MultiReaderBuf[T]) ReaderPeekFirst(readerID int) (*T, error) {
+	mrb.mu.RLock()
+	defer mrb.mu.RUnlock()
+
+	if !mrb.internalIsReaderValid(readerID) {
+		panic("Can't read from a non-existent reader")
+	}
+
+	if mrb.internalReaderLen(readerID) < 1 {
+		return nil, io.EOF
+	}
+
+	result := mrb.data.At(mrb.readers[readerID].offset)
+
+	return &result, nil
+}
+
 // func (mrb *MultiReaderBuf[T]) ReaderConsumeFirst(readerID int) (*T, error)
 
 // ReaderAt retrieves the value at a specific absolute index from the POV of reader readerID.
