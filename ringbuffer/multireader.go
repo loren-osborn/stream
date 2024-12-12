@@ -233,7 +233,7 @@ func (mrb *MultiReaderBuf[T]) ReaderRangeLen(readerID int) int {
 }
 
 // ReaderRange ranges over the ring buffer from the POV of reader readerID.
-func (mrb *MultiReaderBuf[T]) ReaderRange(readerID int, yeildFunc func(index int, value T) bool) {
+func (mrb *MultiReaderBuf[T]) ReaderRange(readerID int, yieldFunc func(index int, value T) bool) {
 	var data []T
 
 	var startIndex int
@@ -258,7 +258,7 @@ func (mrb *MultiReaderBuf[T]) ReaderRange(readerID int, yeildFunc func(index int
 		return
 	}
 
-	mrb.internalRange(yeildFunc, data, startIndex)
+	mrb.internalRange(yieldFunc, data, startIndex)
 }
 
 // ReaderLen returns the length of the ring buffer from the POV of reader readerID.
@@ -322,9 +322,11 @@ func (mrb *MultiReaderBuf[T]) CloseReader(readerID int) {
 		}
 	}
 
-	// reset Reader[T] to ZeroValue before removing it:
-	mrb.readers[readerID].owner = nil
-	mrb.readers[readerID].readerID = 0
+	// reset Reader[T] to ZeroValue before removing it can cause a race
+	// condition: instead we leave the owner and readerID intact to avoid
+	// this (illegal but still possible) race:
+	// mrb.readers[readerID].owner = nil
+	// mrb.readers[readerID].readerID = 0
 	mrb.readers[readerID].offset = 0
 	mrb.readers[readerID] = nil
 
@@ -353,8 +355,8 @@ func (mrb *MultiReaderBuf[T]) GetReader(readerID int) *Reader[T] {
 	return mrb.readers[readerID]
 }
 
-// RangeReaders iterates over readers, calling yeildFunc for each non-closed reader.
-func (mrb *MultiReaderBuf[T]) RangeReaders(yeildFunc func(readerID int, reader *Reader[T]) bool) {
+// RangeReaders iterates over readers, calling yieldFunc for each non-closed reader.
+func (mrb *MultiReaderBuf[T]) RangeReaders(yieldFunc func(readerID int, reader *Reader[T]) bool) {
 	var localReaders []*Reader[T]
 
 	func() { // Use an anonymous function to ensure defer unlocks the mutex
@@ -368,7 +370,7 @@ func (mrb *MultiReaderBuf[T]) RangeReaders(yeildFunc func(readerID int, reader *
 	// Iterate over the copied readers outside the lock
 	for i, rObj := range localReaders {
 		if rObj != nil {
-			if !yeildFunc(i, rObj) {
+			if !yieldFunc(i, rObj) {
 				break
 			}
 		}
@@ -456,7 +458,7 @@ func (r *Reader[T]) RangeLen() int {
 }
 
 // Range ranges over the ring buffer from the POV of the reader.
-func (r *Reader[T]) Range(yeildFunc func(index int, value T) bool) {
+func (r *Reader[T]) Range(yieldFunc func(index int, value T) bool) {
 	var data []T
 
 	var startIndex int
@@ -469,7 +471,7 @@ func (r *Reader[T]) Range(yeildFunc func(index int, value T) bool) {
 		startIndex = r.owner.readers[r.readerID].offset  // Capture the starting absolute index
 	}()
 
-	r.owner.internalRange(yeildFunc, data, startIndex)
+	r.owner.internalRange(yieldFunc, data, startIndex)
 }
 
 // Len returns the length of the ring buffer from the POV of the reader.
@@ -523,18 +525,13 @@ func (mrb *MultiReaderBuf[T]) internalIsReaderValid(readerID int) bool {
 		mrb.readers[readerID].readerID,
 	)
 	assertf(
-		mrb.readers[readerID].offset <= mrb.data.RangeLen(),
-		"INTERNAL ERROR: reader %d off end of ring buffer at index %d (max %d)",
-		readerID,
-		mrb.readers[readerID].offset,
-		mrb.data.RangeLen(),
-	)
-	assertf(
-		mrb.readers[readerID].offset >= mrb.data.RangeFirst(),
-		"INTERNAL ERROR: reader %d off beginning of ring buffer at index %d (min %d)",
+		(mrb.readers[readerID].offset <= mrb.data.RangeLen()) &&
+			(mrb.readers[readerID].offset >= mrb.data.RangeFirst()),
+		"INTERNAL ERROR: reader %d offset (%d) is out of range (%d to %d)",
 		readerID,
 		mrb.readers[readerID].offset,
 		mrb.data.RangeFirst(),
+		mrb.data.RangeLen(),
 	)
 
 	return true
@@ -566,7 +563,7 @@ func (mrb *MultiReaderBuf[T]) internalReaderDiscard(readerID int, count int) {
 	}
 
 	if localSize := mrb.internalReaderLen(readerID); count > localSize {
-		panic(fmt.Sprintf("Attempted to remove %d elements when only %d visible", count, localSize))
+		panic(fmt.Sprintf("only %d elements available when discarding %d", localSize, count))
 	}
 
 	prevMinIdx := mrb.readers[readerID].offset
@@ -608,11 +605,11 @@ func (mrb *MultiReaderBuf[T]) internalReaderToMap(readerID int) map[int]T {
 }
 
 // internalRange iterates over a snapshot of the buffer, invoking the callback for each element.
-func (mrb *MultiReaderBuf[T]) internalRange(yeildFunc func(index int, value T) bool, data []T, startIndex int) {
+func (mrb *MultiReaderBuf[T]) internalRange(yieldFunc func(index int, value T) bool, data []T, startIndex int) {
 	// Iterate over the copied data outside the lock
 	for i, value := range data {
 		absIndex := startIndex + i
-		if !yeildFunc(absIndex, value) {
+		if !yieldFunc(absIndex, value) {
 			break
 		}
 	}

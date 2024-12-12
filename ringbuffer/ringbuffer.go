@@ -216,7 +216,7 @@ func (rb *Buffer[T]) Empty() {
 // Thread Safety:
 //   - Locks the buffer only to extract a snapshot of its state, allowing
 //     concurrent operations during iteration.
-func (rb *Buffer[T]) Range(yeildFunc func(index int, value T) bool) {
+func (rb *Buffer[T]) Range(yieldFunc func(index int, value T) bool) {
 	var data []T
 
 	var startIndex int
@@ -229,7 +229,7 @@ func (rb *Buffer[T]) Range(yeildFunc func(index int, value T) bool) {
 		startIndex = rb.offset      // Capture the starting absolute index
 	}()
 
-	rb.internalRange(yeildFunc, data, startIndex)
+	rb.internalRange(yieldFunc, data, startIndex)
 }
 
 // RangeFirst returns the absolute index of the first valid element in the buffer.
@@ -311,11 +311,11 @@ func (rb *Buffer[T]) internalExpand() {
 }
 
 // internalRange iterates over a snapshot of the buffer, invoking the callback for each element.
-func (rb *Buffer[T]) internalRange(yeildFunc func(index int, value T) bool, data []T, startIndex int) {
+func (rb *Buffer[T]) internalRange(yieldFunc func(index int, value T) bool, data []T, startIndex int) {
 	// Iterate over the copied data outside the lock
 	for i, value := range data {
 		absIndex := startIndex + i
-		if !yeildFunc(absIndex, value) {
+		if !yieldFunc(absIndex, value) {
 			break
 		}
 	}

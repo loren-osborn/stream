@@ -363,35 +363,40 @@ func TestMultiReaderBuf_ConcurrentAccess(t *testing.T) {
 func TestMultiReaderBuf_DiscardInvalidCount(t *testing.T) {
 	t.Parallel()
 
+	ringBuf := ringbuffer.NewMultiReaderBuf[int](0, 1)
+	ringBuf.Append(1)
+
 	defer func() {
+		expected := "only 1 elements available when discarding 2"
+
 		if r := recover(); r == nil {
 			t.Errorf("Expected panic, got none")
-		} else if r != "Attempted to remove 2 elements when only 1 visible" {
-			t.Errorf("Got panic \"%v\" when \"Attempted to remove 2 elements when only 1 visible\" expected", r)
+		} else if r != expected {
+			t.Errorf("Got panic \"%v\" when \"%v\" expected", r, expected)
 		}
 	}()
 
-	rb := ringbuffer.NewMultiReaderBuf[int](0, 1)
-	rb.Append(1)
-	rb.ReaderDiscard(0, 2) // Should panic because only one element exists
+	ringBuf.ReaderDiscard(0, 2) // Should panic because only one element exists
 }
 
 func TestMultiReaderBuf_ResizeInvalidCapacity(t *testing.T) {
 	t.Parallel()
 
+	ringBuf := ringbuffer.NewMultiReaderBuf[int](0, 1)
+	ringBuf.Append(1)
+	ringBuf.Append(2)
+
 	defer func() {
+		expected := "Attempted to resize to 1 elements (not big enough to hold 2 elements)"
+
 		if r := recover(); r == nil {
 			t.Errorf("Expected panic, got none")
-		} else if r != "Attempted to resize to 1 elements (not big enough to hold 2 elements)" {
-			t.Errorf("Got panic \"%v\" when \"Attempted to resize to 1 elements (not big enough "+
-				"to hold 2 elements)\" expected", r)
+		} else if r != expected {
+			t.Errorf("Got panic \"%v\" when \"%v\" expected", r, expected)
 		}
 	}()
 
-	rb := ringbuffer.NewMultiReaderBuf[int](0, 1)
-	rb.Append(1)
-	rb.Append(2)
-	rb.Resize(1) // Should panic because size is 2
+	ringBuf.Resize(1) // Should panic because size is 2
 }
 
 func TestMultiReaderBuf_Range_PanicHandling(t *testing.T) {
@@ -425,10 +430,12 @@ func TestMultiReaderBuf_NegInitialSize_PanicHandling(t *testing.T) {
 	t.Parallel()
 
 	defer func() {
+		expected := "capacity must be positive"
+
 		if r := recover(); r == nil {
 			t.Errorf("Expected panic, but no panic occurred")
-		} else if r != "capacity must be positive" {
-			t.Errorf("Got panic \"%v\" when \"capacity must be positive\" expected", r)
+		} else if r != expected {
+			t.Errorf("Got panic \"%v\" when \"%v\" expected", r, expected)
 		}
 	}()
 
@@ -681,6 +688,8 @@ func TestMultiReaderBuf_CloseReader(t *testing.T) {
 	t.Run("CloseNonExistentReader", func(t *testing.T) {
 		t.Parallel()
 
+		mrb := ringbuffer.NewMultiReaderBuf[int](4, 2)
+
 		defer func() {
 			expecting := "Reader ID 999 is out of range (0 to 1)"
 
@@ -691,7 +700,6 @@ func TestMultiReaderBuf_CloseReader(t *testing.T) {
 			}
 		}()
 
-		mrb := ringbuffer.NewMultiReaderBuf[int](4, 2)
 		mrb.CloseReader(999)
 	})
 
