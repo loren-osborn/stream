@@ -20,10 +20,22 @@ type Reader[T any] struct {
 	offset   int
 }
 
-// NewMultiReaderBuf creates a new Multi-Reader ring buffer with a given capacity and number of readers.
+// NewMultiReaderBuf creates a new MultiReaderBuf with a specified capacity
+// and number of readers.
+//
+// Parameters:
+//   - capacity: The initial capacity of the buffer. If 0, the buffer starts with
+//     a small default capacity.
+//   - numReaders: The number of independent readers to initialize.
+//
+// Panics:
+// - If numReaders is less than 1.
+//
+// Returns:
+// - A pointer to the newly created MultiReaderBuf.
 func NewMultiReaderBuf[T any](capacity int, numReaders int) *MultiReaderBuf[T] {
 	if numReaders < 1 {
-		panic("must have at least one reader")
+		panic(fmt.Sprintf("invalid numReaders (%d): must be at least 1", numReaders))
 	}
 
 	result := &MultiReaderBuf[T]{
@@ -99,8 +111,17 @@ func (mrb *MultiReaderBuf[T]) Resize(newLen int) {
 
 // Reader methods
 
-// ReaderPeekFirst returns a pointer to the first element from the POV of reader
-// readerID, leaving it in place.
+// ReaderPeekFirst retrieves the first element visible to the specified reader
+// without consuming it.
+//
+// Parameters:
+// - readerID: The ID of the reader.
+//
+// Returns:
+// - A pointer to the first element, or nil if the buffer is empty.
+//
+// Errors:
+// - io.EOF: If no data is available for the specified reader.
 func (mrb *MultiReaderBuf[T]) ReaderPeekFirst(readerID int) (*T, error) {
 	mrb.mu.RLock()
 	defer mrb.mu.RUnlock()
@@ -118,14 +139,23 @@ func (mrb *MultiReaderBuf[T]) ReaderPeekFirst(readerID int) (*T, error) {
 	return &result, nil
 }
 
-// ReaderConsumeFirst returns a pointer to the first element from the POV of reader
-// readerID, removing it from visibility.
+// ReaderConsumeFirst retrieves the first element visible to the specified reader
+// and removes it from the reader's view.
+//
+// Parameters:
+// - readerID: The ID of the reader.
+//
+// Returns:
+// - A pointer to the consumed element, or nil if the buffer is empty.
+//
+// Errors:
+// - io.EOF: If no data is available for the specified reader.
 func (mrb *MultiReaderBuf[T]) ReaderConsumeFirst(readerID int) (*T, error) {
 	mrb.mu.Lock()
 	defer mrb.mu.Unlock()
 
 	if !mrb.internalIsReaderValid(readerID) {
-		panic("Can't read from a non-existent reader")
+		panic("Reading from a reader that's already been closed isn't allowed.")
 	}
 
 	if mrb.internalReaderLen(readerID) < 1 {
@@ -155,16 +185,16 @@ func (mrb *MultiReaderBuf[T]) ReaderAt(readerID int, index int) T {
 	defer mrb.mu.RUnlock()
 
 	if !mrb.internalIsReaderValid(readerID) {
-		panic("Can't read from a non-existent reader")
+		panic("Reading from a reader that's already been closed isn't allowed.")
 	}
 
-	if index < mrb.readers[readerID].offset {
-		panic(fmt.Sprintf("Attempted to access index %d before initial index %d", index, mrb.readers[readerID].offset))
-	}
-
-	// This is a duplicate check, but here for completeness
-	if index >= mrb.data.RangeLen() {
-		panic(fmt.Sprintf("Attempted to access index %d after final index %d", index, mrb.data.RangeLen()-1))
+	if (index < mrb.readers[readerID].offset) || (index >= mrb.data.RangeLen()) {
+		panic(fmt.Sprintf(
+			"index %d is out of range (%d to %d)",
+			index,
+			mrb.readers[readerID].offset,
+			mrb.data.RangeLen()-1,
+		))
 	}
 
 	return mrb.data.At(index)
@@ -472,16 +502,8 @@ func (r *Reader[T]) ToMap() map[int]T {
 
 // We panic on range error and data inconsistency, and return false on other errors.
 func (mrb *MultiReaderBuf[T]) internalIsReaderValid(readerID int) bool {
-	if readerID < 0 {
-		panic(fmt.Sprintf("Negative readerID (%d) not allowed", readerID))
-	}
-
-	if readerID >= len(mrb.readers) {
-		panic(fmt.Sprintf(
-			"Attempting to use readerID %d when only %d readers allocated",
-			readerID,
-			len(mrb.readers),
-		))
+	if (readerID < 0) || (readerID >= len(mrb.readers)) {
+		panic(fmt.Sprintf("Reader ID %d is out of range (0 to %d)", readerID, len(mrb.readers)-1))
 	}
 
 	if mrb.readers[readerID] == nil {
@@ -540,7 +562,7 @@ func (mrb *MultiReaderBuf[T]) internalReaderToSlice(readerID int) []T {
 
 func (mrb *MultiReaderBuf[T]) internalReaderDiscard(readerID int, count int) {
 	if !mrb.internalIsReaderValid(readerID) {
-		panic("Can't discard from a non-existent reader")
+		panic("Discarding from a reader that's already been closed isn't allowed.")
 	}
 
 	if localSize := mrb.internalReaderLen(readerID); count > localSize {

@@ -346,8 +346,8 @@ func TestRingBuffer_NegInitialSize_PanicHandling(t *testing.T) {
 	defer func() {
 		if r := recover(); r == nil {
 			t.Errorf("Expected panic, but no panic occurred")
-		} else if r != "capacity must be greater than zero" {
-			t.Errorf("Got panic \"%v\" when \"capacity must be greater than zero\" expected", r)
+		} else if r != "capacity must be positive" {
+			t.Errorf("Got panic \"%v\" when \"capacity must be positive\" expected", r)
 		}
 	}()
 

@@ -427,8 +427,8 @@ func TestMultiReaderBuf_NegInitialSize_PanicHandling(t *testing.T) {
 	defer func() {
 		if r := recover(); r == nil {
 			t.Errorf("Expected panic, but no panic occurred")
-		} else if r != "capacity must be greater than zero" {
-			t.Errorf("Got panic \"%v\" when \"capacity must be greater than zero\" expected", r)
+		} else if r != "capacity must be positive" {
+			t.Errorf("Got panic \"%v\" when \"capacity must be positive\" expected", r)
 		}
 	}()
 
@@ -453,10 +453,12 @@ func TestMultiReaderBuf_IndexAfter_PanicHandling(t *testing.T) {
 	}
 
 	defer func() {
+		expected := "index 5 is out of range (2 to 4)"
+
 		if r := recover(); r == nil {
 			t.Errorf("Expected panic, but no panic occurred")
-		} else if r != "Attempted to access index 5 after final index 4" {
-			t.Errorf("Got panic \"%v\" when \"Attempted to access index 5 after final index 4\" expected", r)
+		} else if r != expected {
+			t.Errorf("Got panic \"%v\" when \"%v\" expected", r, expected)
 		}
 	}()
 
@@ -513,17 +515,19 @@ func TestMultiReaderBuf_ReaderPeekFirst(t *testing.T) {
 	}
 
 	defer func() {
+		expected := "Reader ID 999 is out of range (0 to 1)"
+
 		if r := recover(); r == nil {
 			t.Errorf("Expected panic for invalid reader ID, got none")
-		} else if r != "Attempting to use readerID 999 when only 2 readers allocated" {
-			t.Errorf("Got panic \"%v\" when \"Attempting to use readerID 999 when only 2 readers allocated\" expected", r)
+		} else if r != expected {
+			t.Errorf("Got panic \"%v\" when \"%v\" expected", r, expected)
 		}
 	}()
 
 	_, _ = mrb.ReaderPeekFirst(999) // Invalid ID
 }
 
-//nolint: cyclop // *FIXME*
+//nolint: cyclop,funlen // *FIXME*
 func TestMultiReaderBuf_ReaderConsumeFirst(t *testing.T) {
 	t.Parallel()
 
@@ -576,10 +580,12 @@ func TestMultiReaderBuf_ReaderConsumeFirst(t *testing.T) {
 	}
 
 	defer func() {
+		expected := "Reader ID 2 is out of range (0 to 1)"
+
 		if r := recover(); r == nil {
 			t.Errorf("Expected panic for invalid reader ID, got none")
-		} else if r != "Attempting to use readerID 2 when only 2 readers allocated" {
-			t.Errorf("Got panic \"%v\" when \"Attempting to use readerID 2 when only 2 readers allocated\" expected", r)
+		} else if r != expected {
+			t.Errorf("Got panic \"%v\" when \"%v\" expected", r, expected)
 		}
 	}()
 
@@ -629,10 +635,12 @@ func TestMultiReaderBuf_ReaderToSlice(t *testing.T) {
 		mrb := ringbuffer.NewMultiReaderBuf[int](4, 2)
 
 		defer func() {
+			expected := "Reader ID -1 is out of range (0 to 1)"
+
 			if r := recover(); r == nil {
 				t.Errorf("Expected panic for invalid reader ID, got none")
-			} else if r != "Negative readerID (-1) not allowed" {
-				t.Errorf("Got panic \"%v\" when \"Negative readerID (-1) not allowed\" expected", r)
+			} else if r != expected {
+				t.Errorf("Got panic \"%v\" when \"%v\" expected", r, expected)
 			}
 		}()
 		mrb.ReaderToSlice(-1)
@@ -674,10 +682,12 @@ func TestMultiReaderBuf_CloseReader(t *testing.T) {
 		t.Parallel()
 
 		defer func() {
+			expecting := "Reader ID 999 is out of range (0 to 1)"
+
 			if r := recover(); r == nil {
 				t.Errorf("Expected panic for invalid reader ID, got none")
-			} else if r != "Attempting to use readerID 999 when only 2 readers allocated" {
-				t.Errorf("Got panic \"%v\" when \"Attempting to use readerID 999 when only 2 readers allocated\" expected", r)
+			} else if r != expecting {
+				t.Errorf("Got panic \"%v\" when \"%v\" expected", r, expecting)
 			}
 		}()
 
@@ -884,10 +894,12 @@ func TestMultiReaderBuf_ErrorConditions(t *testing.T) {
 		mrb.CloseReader(1)
 
 		defer func() {
+			expected := "Reading from a reader that's already been closed isn't allowed."
+
 			if r := recover(); r == nil {
 				t.Errorf("Expected panic for invalid reader ID, got none")
-			} else if r != "Can't read from a non-existent reader" {
-				t.Errorf("Got panic \"%v\" when \"Can't read from a non-existent reader\" expected", r)
+			} else if r != expected {
+				t.Errorf("Got panic \"%v\" when \"%v\" expected", r, expected)
 			}
 		}()
 
@@ -901,7 +913,7 @@ func TestMultiReaderBuf_NoReadersCreation(t *testing.T) {
 	t.Parallel()
 
 	defer func() {
-		expected := "must have at least one reader"
+		expected := "invalid numReaders (0): must be at least 1"
 
 		if r := recover(); r == nil {
 			t.Errorf("Expected panic creating MultiReaderBuf with 0 readers, got none")
@@ -999,7 +1011,7 @@ func TestMultiReaderBuf_ReaderAt_ClosedReaderID(t *testing.T) {
 			return
 		}
 
-		expected := "Can't read from a non-existent reader"
+		expected := "Reading from a reader that's already been closed isn't allowed."
 		if reader != expected {
 			t.Errorf("Got panic %q, expected %q", reader, expected)
 		}
@@ -1029,7 +1041,7 @@ func TestMultiReaderBuf_ReaderAt_IndexBeforeRangeFirst(t *testing.T) {
 			return
 		}
 
-		expected := "Attempted to access index 0 before initial index 1"
+		expected := "index 0 is out of range (1 to 1)"
 		if reader != expected {
 			t.Errorf("Got panic %q, expected %q", reader, expected)
 		}
@@ -1286,10 +1298,12 @@ func TestMultiReaderBuf_ReaderDiscard_ClosedReader(t *testing.T) {
 	mrb.CloseReader(0)
 
 	defer func() {
+		expected := "Discarding from a reader that's already been closed isn't allowed."
+
 		if r := recover(); r == nil {
 			t.Errorf("Expected panic calling ReaderDiscard() on a closed reader, got none")
-		} else if r != "Can't discard from a non-existent reader" {
-			t.Errorf("Got unexpected panic message: %v", r)
+		} else if r != expected {
+			t.Errorf("Got unexpected panic message: \"%v\" expected \"%v\"", r, expected)
 		}
 	}()
 

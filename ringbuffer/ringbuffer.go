@@ -1,23 +1,23 @@
 // Package ringbuffer provides efficient and thread-safe implementations of ring buffers,
-// including simple ring buffers and advanced multi-reader buffers.
+// including simple ring buffer and multi-reader variants.
 //
-// A ring buffer is a dynamically resizable circular queue that uses a
-// continuous block of memory for storage. When the buffer reaches its capacity, it wraps
-// around, overwriting the oldest data.
+// A ring buffer is a contiguous memory-based circular queue that grows dynamically
+// to accommodate data. It differs from Go's container/ring package, which implements
+// an untyped circular linked list. The ringbuffer package uses generics for type safety
+// and optimizes for performance with contiguous memory storage.
 //
 // # Features
 //
-// The `ringbuffer` package provides the following:
-//   - A general purpose `Buffer` that supports appending, random access,
-//     iteration, and resizing.
-//   - A `MultiReader` implementation, which enables multiple readers to
-//     independently consume data from a shared ring buffer. Each reader maintains
-//     its own position, allowing for concurrent reads at different points in the buffer.
+// The `ringbuffer` package includes:
+//   - `Buffer`: A thread-safe, dynamically growing circular buffer supporting
+//     appending, random access, iteration, and resizing.
+//   - `MultiReaderBuf`: A multi-reader ring buffer allowing independent readers
+//     to consume data concurrently, each maintaining its own position.
 //
 // # Thread Safety
 //
-// Both `Buffer` and `MultiReader` are thread-safe and can be used concurrently. Synchronization
-// mechanisms ensure data consistency without sacrificing performance.
+// All components in this package are thread-safe, employing synchronization
+// mechanisms to ensure consistency without compromising performance.
 package ringbuffer
 
 import (
@@ -57,7 +57,7 @@ type Buffer[T any] struct {
 // - A pointer to the newly created Buffer.
 func New[T any](capacity int) *Buffer[T] {
 	if capacity < 0 {
-		panic("capacity must be greater than zero")
+		panic("capacity must be positive")
 	}
 
 	result := &Buffer[T]{
@@ -77,14 +77,14 @@ func New[T any](capacity int) *Buffer[T] {
 
 // Core Public Methods
 
-// Append adds a new element to the end of the buffer.
-// The buffer automatically expands if the capacity is exceeded.
+// Append adds a new element to the end of the buffer, automatically resizing
+// the buffer if capacity is exceeded.
 //
 // Parameters:
 // - value: The value to append.
 //
 // Returns:
-// - The absolute index of the appended element.
+// - The absolute index of the appended element, starting from 0.
 func (rb *Buffer[T]) Append(value T) int {
 	rb.mu.Lock()
 	defer rb.mu.Unlock()
@@ -103,13 +103,14 @@ func (rb *Buffer[T]) Append(value T) int {
 // At retrieves the value at a specific absolute index in the buffer.
 //
 // Parameters:
-// - index: The absolute index of the element.
+// - index: The absolute index of the element (not relative to the buffer's start).
 //
 // Returns:
 // - The value at the specified index.
 //
 // Panics:
-// - If the index is out of bounds (less than RangeFirst() or greater than or equal to RangeLen()).
+//   - If the index is out of range (less than RangeFirst() or greater than or
+//     equal to RangeLen()).
 func (rb *Buffer[T]) At(index int) T {
 	rb.mu.RLock()
 	defer rb.mu.RUnlock()
