@@ -6,33 +6,26 @@ import (
 	"sync"
 )
 
-// MultiReaderBuf is a multi-reader interface encapsulating a Buffer ring buffer.
+// MultiReaderBuf encapsulates a Buffer and allows multiple independent readers
+// to consume data concurrently, each maintaining its own position within the
+// buffer.
 type MultiReaderBuf[T any] struct {
 	mu      sync.RWMutex
 	data    *Buffer[T]
 	readers []*Reader[T]
 }
 
-// Reader reads from a MultiReaderBuf.
+// Reader provides an interface for reading from a MultiReaderBuf. Each Reader
+// maintains its own view of the buffer, allowing for independent consumption of
+// data.
 type Reader[T any] struct {
 	owner    *MultiReaderBuf[T]
 	readerID int
 	offset   int
 }
 
-// NewMultiReaderBuf creates a new MultiReaderBuf with a specified capacity
-// and number of readers.
-//
-// Parameters:
-//   - capacity: The initial capacity of the buffer. If 0, the buffer starts with
-//     a small default capacity.
-//   - numReaders: The number of independent readers to initialize.
-//
-// Panics:
-// - If numReaders is less than 1.
-//
-// Returns:
-// - A pointer to the newly created MultiReaderBuf.
+// NewMultiReaderBuf creates a new MultiReaderBuf with the given capacity and
+// number of readers. If numReaders is less than 1, NewMultiReaderBuf panics.
 func NewMultiReaderBuf[T any](capacity int, numReaders int) *MultiReaderBuf[T] {
 	if numReaders < 1 {
 		panic(fmt.Sprintf("invalid numReaders (%d): must be at least 1", numReaders))
@@ -57,7 +50,8 @@ func NewMultiReaderBuf[T any](capacity int, numReaders int) *MultiReaderBuf[T] {
 
 // Writer methods
 
-// Append adds a new value to the end of the ring buffer.
+// Append adds a new value to the end of the ring buffer. It returns the
+// absolute index of the appended element.
 func (mrb *MultiReaderBuf[T]) Append(value T) int {
 	mrb.mu.Lock()
 	defer mrb.mu.Unlock()
@@ -69,10 +63,8 @@ func (mrb *MultiReaderBuf[T]) Append(value T) int {
 	return mrb.data.Append(value)
 }
 
-// Cap returns the current capacity of the buffer.
-//
-// Returns:
-// - The maximum number of elements the buffer can hold without resizing.
+// Cap returns the current capacity of the buffer, indicating the maximum
+// number of elements it can hold without resizing.
 func (mrb *MultiReaderBuf[T]) Cap() int {
 	mrb.mu.RLock()
 	defer mrb.mu.RUnlock()
@@ -126,9 +118,7 @@ func (mrb *MultiReaderBuf[T]) ReaderPeekFirst(readerID int) (*T, error) {
 	mrb.mu.RLock()
 	defer mrb.mu.RUnlock()
 
-	if !mrb.internalIsReaderValid(readerID) {
-		return nil, io.EOF
-	}
+	mrb.internalValidateReader("peeking from", readerID)
 
 	if mrb.internalReaderLen(readerID) < 1 {
 		return nil, io.EOF
@@ -154,9 +144,7 @@ func (mrb *MultiReaderBuf[T]) ReaderConsumeFirst(readerID int) (*T, error) {
 	mrb.mu.Lock()
 	defer mrb.mu.Unlock()
 
-	if !mrb.internalIsReaderValid(readerID) {
-		panic("Reading from a reader that's already been closed isn't allowed.")
-	}
+	mrb.internalValidateReader("consuming from", readerID)
 
 	if mrb.internalReaderLen(readerID) < 1 {
 		return nil, io.EOF
@@ -184,9 +172,7 @@ func (mrb *MultiReaderBuf[T]) ReaderAt(readerID int, index int) T {
 	mrb.mu.RLock()
 	defer mrb.mu.RUnlock()
 
-	if !mrb.internalIsReaderValid(readerID) {
-		panic("Reading from a reader that's already been closed isn't allowed.")
-	}
+	mrb.internalValidateReader("reading from", readerID)
 
 	if (index < mrb.readers[readerID].offset) || (index >= mrb.data.RangeLen()) {
 		panic(fmt.Sprintf(
@@ -213,10 +199,7 @@ func (mrb *MultiReaderBuf[T]) ReaderRangeFirst(readerID int) int {
 	mrb.mu.RLock()
 	defer mrb.mu.RUnlock()
 
-	if !mrb.internalIsReaderValid(readerID) {
-		// off end:
-		return mrb.data.RangeLen()
-	}
+	mrb.internalValidateReader("indexing", readerID)
 
 	return mrb.readers[readerID].offset
 }
@@ -227,7 +210,7 @@ func (mrb *MultiReaderBuf[T]) ReaderRangeLen(readerID int) int {
 	mrb.mu.RLock()
 	defer mrb.mu.RUnlock()
 
-	_ = mrb.internalIsReaderValid(readerID)
+	mrb.internalValidateReader("indexing", readerID)
 
 	return mrb.data.RangeLen()
 }
@@ -238,25 +221,15 @@ func (mrb *MultiReaderBuf[T]) ReaderRange(readerID int, yieldFunc func(index int
 
 	var startIndex int
 
-	var valid bool
-
 	func() { // Use an anonymous function to ensure defer unlocks the mutex
 		mrb.mu.RLock()
 		defer mrb.mu.RUnlock()
 
-		valid = mrb.internalIsReaderValid(readerID)
-
-		if !valid {
-			return
-		}
+		mrb.internalValidateReader("iterating over", readerID)
 
 		data = mrb.internalReaderToSlice(readerID) // Create a local copy of the data
 		startIndex = mrb.readers[readerID].offset  // Capture the starting absolute index
 	}()
-
-	if !valid {
-		return
-	}
 
 	mrb.internalRange(yieldFunc, data, startIndex)
 }
@@ -294,15 +267,13 @@ func (mrb *MultiReaderBuf[T]) ReaderToMap(readerID int) map[int]T {
 
 // // Reader management
 
-// CloseReader destroys the reader with the given ID.
+// CloseReader closes the reader with the specified readerID. Once closed,
+// any operation on this reader will result in a panic.
 func (mrb *MultiReaderBuf[T]) CloseReader(readerID int) {
 	mrb.mu.Lock()
 	defer mrb.mu.Unlock()
 
-	if !mrb.internalIsReaderValid(readerID) {
-		// already closed
-		return
-	}
+	mrb.internalValidateReader("closing", readerID)
 
 	newReaderCount := 0
 	prevMinIdx := mrb.readers[readerID].offset
@@ -348,9 +319,7 @@ func (mrb *MultiReaderBuf[T]) GetReader(readerID int) *Reader[T] {
 	mrb.mu.RLock()
 	defer mrb.mu.RUnlock()
 
-	// This will only return false when mrb.readers[readerID] is nil,
-	// which is what we want to return for a (non-panicing) invalid reader:
-	_ = mrb.internalIsReaderValid(readerID)
+	mrb.internalValidateReader("getting", readerID)
 
 	return mrb.readers[readerID]
 }
@@ -414,7 +383,6 @@ func (r *Reader[T]) ConsumeFirst() (*T, error) {
 
 // ID returns the reader's readerID.
 func (r *Reader[T]) ID() int {
-	// This will already panic on a nil owner
 	r.owner.mu.RLock()
 	defer r.owner.mu.RUnlock()
 
@@ -503,13 +471,13 @@ func (r *Reader[T]) ToMap() map[int]T {
 }
 
 // We panic on range error and data inconsistency, and return false on other errors.
-func (mrb *MultiReaderBuf[T]) internalIsReaderValid(readerID int) bool {
+func (mrb *MultiReaderBuf[T]) internalValidateReader(operation string, readerID int) {
 	if (readerID < 0) || (readerID >= len(mrb.readers)) {
 		panic(fmt.Sprintf("Reader ID %d is out of range (0 to %d)", readerID, len(mrb.readers)-1))
 	}
 
 	if mrb.readers[readerID] == nil {
-		return false
+		panic(fmt.Sprintf("%s closed reader %d", operation, readerID))
 	}
 
 	assertf(
@@ -533,23 +501,16 @@ func (mrb *MultiReaderBuf[T]) internalIsReaderValid(readerID int) bool {
 		mrb.data.RangeFirst(),
 		mrb.data.RangeLen(),
 	)
-
-	return true
 }
 
 func (mrb *MultiReaderBuf[T]) internalReaderLen(readerID int) int {
-	if !mrb.internalIsReaderValid(readerID) {
-		// empty:
-		return 0
-	}
+	mrb.internalValidateReader("indexing", readerID)
 
 	return mrb.data.RangeLen() - mrb.readers[readerID].offset
 }
 
 func (mrb *MultiReaderBuf[T]) internalReaderToSlice(readerID int) []T {
-	if !mrb.internalIsReaderValid(readerID) {
-		return nil
-	}
+	mrb.internalValidateReader("snapshotting", readerID)
 
 	localOffset := mrb.readers[readerID].offset - mrb.data.RangeFirst()
 	resultSuperset := mrb.data.ToSlice()
@@ -558,9 +519,7 @@ func (mrb *MultiReaderBuf[T]) internalReaderToSlice(readerID int) []T {
 }
 
 func (mrb *MultiReaderBuf[T]) internalReaderDiscard(readerID int, count int) {
-	if !mrb.internalIsReaderValid(readerID) {
-		panic("Discarding from a reader that's already been closed isn't allowed.")
-	}
+	mrb.internalValidateReader("discarding", readerID)
 
 	if localSize := mrb.internalReaderLen(readerID); count > localSize {
 		panic(fmt.Sprintf("only %d elements available when discarding %d", localSize, count))
@@ -588,9 +547,7 @@ func (mrb *MultiReaderBuf[T]) internalReaderDiscard(readerID int, count int) {
 }
 
 func (mrb *MultiReaderBuf[T]) internalReaderToMap(readerID int) map[int]T {
-	if !mrb.internalIsReaderValid(readerID) {
-		return nil
-	}
+	mrb.internalValidateReader("snapshotting", readerID)
 
 	asSlice := mrb.internalReaderToSlice(readerID)
 	result := make(map[int]T, mrb.internalReaderLen(readerID))

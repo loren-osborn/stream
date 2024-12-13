@@ -650,10 +650,12 @@ func TestMultiReaderBuf_ReaderToSlice(t *testing.T) {
 				t.Errorf("Got panic \"%v\" when \"%v\" expected", r, expected)
 			}
 		}()
+
 		mrb.ReaderToSlice(-1)
 	})
 }
 
+//nolint: funlen // *FIXME*
 func TestMultiReaderBuf_CloseReader(t *testing.T) {
 	t.Parallel()
 
@@ -667,22 +669,22 @@ func TestMultiReaderBuf_CloseReader(t *testing.T) {
 
 		mrb.CloseReader(0)
 
-		val, err := mrb.ReaderPeekFirst(0)
-
-		if err == nil {
-			t.Errorf("Expected error when accessing closed reader, got nil")
-		} else if !errors.Is(err, io.EOF) {
-			t.Errorf("expected error %v, got %v", io.EOF, err)
-		}
-
-		if val != nil {
-			t.Errorf("Expected nil val pointer, got pointer to %v", *val)
-		}
-
-		val, err = mrb.ReaderPeekFirst(1)
+		val, err := mrb.ReaderPeekFirst(1)
 		if err != nil || val == nil || *val != 100 {
 			t.Errorf("Expected reader 1 first element 100, got %v (err: %v)", val, err)
 		}
+
+		defer func() {
+			expected := "peeking from closed reader 0"
+
+			if r := recover(); r == nil {
+				t.Errorf("Expected panic for invalid reader ID, got none")
+			} else if r != expected {
+				t.Errorf("Got panic \"%v\" when \"%v\" expected", r, expected)
+			}
+		}()
+
+		_, _ = mrb.ReaderPeekFirst(0)
 	})
 
 	t.Run("CloseNonExistentReader", func(t *testing.T) {
@@ -708,6 +710,17 @@ func TestMultiReaderBuf_CloseReader(t *testing.T) {
 
 		mrb := ringbuffer.NewMultiReaderBuf[int](0, 1)
 		mrb.CloseReader(0)
+
+		defer func() {
+			expecting := "closing closed reader 0"
+
+			if r := recover(); r == nil {
+				t.Errorf("Expected panic for invalid reader ID, got none")
+			} else if r != expecting {
+				t.Errorf("Got panic \"%v\" when \"%v\" expected", r, expecting)
+			}
+		}()
+
 		mrb.CloseReader(0)
 	})
 }
@@ -834,10 +847,15 @@ func TestReader_At(t *testing.T) {
 	}
 
 	defer func() {
-		if rec := recover(); rec == nil {
-			t.Errorf("Expected panic accessing out-of-range element")
+		expecting := "index 3 is out of range (0 to 2)"
+
+		if r := recover(); r == nil {
+			t.Errorf("Expected panic for invalid reader ID, got none")
+		} else if r != expecting {
+			t.Errorf("Got panic \"%v\" when \"%v\" expected", r, expecting)
 		}
 	}()
+
 	reader.At(reader.RangeLen()) // out of range
 }
 
@@ -889,10 +907,17 @@ func TestMultiReaderBuf_ErrorConditions(t *testing.T) {
 		mrb := ringbuffer.NewMultiReaderBuf[int](4, 2)
 		mrb.CloseReader(1)
 
-		_, err := mrb.ReaderPeekFirst(1)
-		if err == nil {
-			t.Errorf("Expected error peeking closed reader")
-		}
+		defer func() {
+			expecting := "peeking from closed reader 1"
+
+			if r := recover(); r == nil {
+				t.Errorf("Expected panic for invalid reader ID, got none")
+			} else if r != expecting {
+				t.Errorf("Got panic \"%v\" when \"%v\" expected", r, expecting)
+			}
+		}()
+
+		_, _ = mrb.ReaderPeekFirst(1)
 	})
 
 	t.Run("ConsumeFirstOnClosedReader", func(t *testing.T) {
@@ -902,7 +927,7 @@ func TestMultiReaderBuf_ErrorConditions(t *testing.T) {
 		mrb.CloseReader(1)
 
 		defer func() {
-			expected := "Reading from a reader that's already been closed isn't allowed."
+			expected := "consuming from closed reader 1"
 
 			if r := recover(); r == nil {
 				t.Errorf("Expected panic for invalid reader ID, got none")
@@ -1012,20 +1037,39 @@ func TestMultiReaderBuf_ReaderAt_ClosedReaderID(t *testing.T) {
 	mrb.CloseReader(0)
 
 	defer func() {
-		reader := recover()
-		if reader == nil {
+		expected := "reading from closed reader 0"
+
+		if reader := recover(); reader == nil {
 			t.Errorf("Expected panic for accessing closed ReaderID, got none")
-
-			return
-		}
-
-		expected := "Reading from a reader that's already been closed isn't allowed."
-		if reader != expected {
+		} else if reader != expected {
 			t.Errorf("Got panic %q, expected %q", reader, expected)
 		}
 	}()
 
-	_ = mrb.ReaderAt(0, mrb.ReaderRangeFirst(0)) // Access closed ReaderID
+	_ = mrb.ReaderAt(0, 0) // Access closed ReaderID
+}
+
+func TestMultiReaderBuf_ReaderRangeFirst_ClosedReaderID(t *testing.T) {
+	t.Parallel()
+
+	mrb := ringbuffer.NewMultiReaderBuf[int](4, 2)
+	mrb.Append(10)
+	mrb.Append(20)
+
+	// Close reader 0
+	mrb.CloseReader(0)
+
+	defer func() {
+		expected := "indexing closed reader 0"
+
+		if reader := recover(); reader == nil {
+			t.Errorf("Expected panic for accessing closed ReaderID, got none")
+		} else if reader != expected {
+			t.Errorf("Got panic %q, expected %q", reader, expected)
+		}
+	}()
+
+	_ = mrb.ReaderRangeFirst(0) // Access closed ReaderID
 }
 
 func TestMultiReaderBuf_ReaderAt_IndexBeforeRangeFirst(t *testing.T) {
@@ -1072,16 +1116,25 @@ func TestMultiReaderBuf_ReaderRange_ClosedReaderID(t *testing.T) {
 	// Attempt to iterate over the range with the closed reader
 	var iterations int
 
+	defer func() {
+		expected := "iterating over closed reader 0"
+
+		if r := recover(); r == nil {
+			t.Errorf("Expected panic calling ReaderDiscard() on a closed reader, got none")
+		} else if r != expected {
+			t.Errorf("Got unexpected panic message: \"%v\" expected \"%v\"", r, expected)
+		}
+
+		if iterations != 0 {
+			t.Errorf("Got %d unexpected iterations when 0 expected.", iterations)
+		}
+	}()
+
 	mrb.ReaderRange(0, func(_ int, _ int) bool {
 		iterations++
 
 		return true
 	})
-
-	// Verify there were no iterations
-	if iterations != 0 {
-		t.Errorf("Expected 0 iterations for closed ReaderID, got %d", iterations)
-	}
 }
 
 func TestMultiReaderBuf_CloseReaderWithHigherRangeFirst(t *testing.T) {
@@ -1224,13 +1277,18 @@ func TestMultiReaderBuf_ReaderToMap_ClosedReader(t *testing.T) {
 	// Close ReaderID 0
 	mrb.CloseReader(0)
 
-	// Call ReaderToMap on the closed reader
-	result := mrb.ReaderToMap(0)
+	defer func() {
+		expected := "snapshotting closed reader 0"
 
-	// Verify the result is nil
-	if result != nil {
-		t.Errorf("Expected nil map for closed reader, got %v", result)
-	}
+		if r := recover(); r == nil {
+			t.Errorf("Expected panic calling ReaderDiscard() on a closed reader, got none")
+		} else if r != expected {
+			t.Errorf("Got unexpected panic message: \"%v\" expected \"%v\"", r, expected)
+		}
+	}()
+
+	// Call ReaderToMap on the closed reader
+	_ = mrb.ReaderToMap(0)
 }
 
 func TestMultiReaderBuf_ReaderToSlice_ClosedReader(t *testing.T) {
@@ -1243,13 +1301,18 @@ func TestMultiReaderBuf_ReaderToSlice_ClosedReader(t *testing.T) {
 	// Close ReaderID 0
 	mrb.CloseReader(0)
 
-	// Call ReaderToSlice on the closed reader
-	result := mrb.ReaderToSlice(0)
+	defer func() {
+		expected := "snapshotting closed reader 0"
 
-	// Verify the result is nil
-	if result != nil {
-		t.Errorf("Expected nil slice for closed reader, got %v", result)
-	}
+		if r := recover(); r == nil {
+			t.Errorf("Expected panic calling ReaderDiscard() on a closed reader, got none")
+		} else if r != expected {
+			t.Errorf("Got unexpected panic message: \"%v\" expected \"%v\"", r, expected)
+		}
+	}()
+
+	// Call ReaderToSlice on the closed reader
+	_ = mrb.ReaderToSlice(0)
 }
 
 func TestMultiReaderBuf_Len_ClosedReader(t *testing.T) {
@@ -1262,15 +1325,23 @@ func TestMultiReaderBuf_Len_ClosedReader(t *testing.T) {
 	// Close ReaderID 0
 	mrb.CloseReader(0)
 
-	// Verify Len of the closed reader is 0
-	if length := mrb.ReaderLen(0); length != 0 {
-		t.Errorf("Expected length of closed reader to be 0, got %d", length)
-	}
-
 	// Verify that the open reader has the correct length
 	if length := mrb.ReaderLen(1); length != 2 {
 		t.Errorf("Expected length of open reader to be 2, got %d", length)
 	}
+
+	defer func() {
+		expected := "indexing closed reader 0"
+
+		if r := recover(); r == nil {
+			t.Errorf("Expected panic calling ReaderDiscard() on a closed reader, got none")
+		} else if r != expected {
+			t.Errorf("Got unexpected panic message: \"%v\" expected \"%v\"", r, expected)
+		}
+	}()
+
+	// Verify Len of the closed reader is 0
+	_ = mrb.ReaderLen(0)
 }
 
 func TestMultiReaderBuf_RangeReaders_HaltIteration(t *testing.T) {
@@ -1306,7 +1377,7 @@ func TestMultiReaderBuf_ReaderDiscard_ClosedReader(t *testing.T) {
 	mrb.CloseReader(0)
 
 	defer func() {
-		expected := "Discarding from a reader that's already been closed isn't allowed."
+		expected := "discarding closed reader 0"
 
 		if r := recover(); r == nil {
 			t.Errorf("Expected panic calling ReaderDiscard() on a closed reader, got none")

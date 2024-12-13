@@ -1,23 +1,14 @@
-// Package ringbuffer provides efficient and thread-safe implementations of ring buffers,
-// including simple ring buffer and multi-reader variants.
+// Package ringbuffer provides a thread-safe, dynamically growing circular buffer.
+// Unlike container/ring, which is an untyped circular linked list, ringbuffer uses
+// generics and a contiguous memory block for storage, offering efficient random access
+// and resizing.
 //
-// A ring buffer is a contiguous memory-based circular queue that grows dynamically
-// to accommodate data. It differs from Go's container/ring package, which implements
-// an untyped circular linked list. The ringbuffer package uses generics for type safety
-// and optimizes for performance with contiguous memory storage.
+// This package provides two main types:
+//   - Buffer: A circular buffer supporting append, random access, iteration, and resizing.
+//   - MultiReaderBuf: A variant supporting multiple independent readers.
 //
-// # Features
-//
-// The `ringbuffer` package includes:
-//   - `Buffer`: A thread-safe, dynamically growing circular buffer supporting
-//     appending, random access, iteration, and resizing.
-//   - `MultiReaderBuf`: A multi-reader ring buffer allowing independent readers
-//     to consume data concurrently, each maintaining its own position.
-//
-// # Thread Safety
-//
-// All components in this package are thread-safe, employing synchronization
-// mechanisms to ensure consistency without compromising performance.
+// All methods of both Buffer and MultiReaderBuf are safe for concurrent use by multiple
+// goroutines.
 package ringbuffer
 
 import (
@@ -27,14 +18,13 @@ import (
 
 // Type definition
 
-// Buffer is a thread-safe, dynamically growing circular buffer with absolute indexing.
-//
-// Buffer provides methods for appending, retrieving, and discarding elements,
-// as well as iterating over its contents in a range-based manner. It expands
-// automatically when capacity is exceeded.
+// Buffer is a thread-safe, dynamically growing circular buffer with absolute
+// indexing. It provides methods for appending, retrieving, discarding elements,
+// and iterating over its contents. The buffer automatically expands when
+// capacity is exceeded.
 //
 // Type Parameter:
-// - T: The type of elements stored in the buffer.
+//   - T: The type of elements stored in the buffer.
 type Buffer[T any] struct {
 	mu     sync.RWMutex
 	data   []T // Underlying slice to store elements
@@ -45,16 +35,8 @@ type Buffer[T any] struct {
 
 // Constructor
 
-// New creates a new Buffer with the specified initial capacity.
-//
-// Parameters:
-// - capacity: The initial capacity of the ring buffer.
-//
-// Panics:
-// - If capacity is less than zero.
-//
-// Returns:
-// - A pointer to the newly created Buffer.
+// New returns a new Buffer with the given initial capacity.
+// If capacity is less than zero, New panics.
 func New[T any](capacity int) *Buffer[T] {
 	if capacity < 0 {
 		panic("capacity must be positive")
@@ -77,14 +59,9 @@ func New[T any](capacity int) *Buffer[T] {
 
 // Core Public Methods
 
-// Append adds a new element to the end of the buffer, automatically resizing
-// the buffer if capacity is exceeded.
-//
-// Parameters:
-// - value: The value to append.
-//
-// Returns:
-// - The absolute index of the appended element, starting from 0.
+// Append adds a new element to the end of the buffer. If the buffer is at
+// capacity, it automatically grows. It returns the absolute index of the
+// appended element.
 func (rb *Buffer[T]) Append(value T) int {
 	rb.mu.Lock()
 	defer rb.mu.Unlock()
@@ -100,17 +77,9 @@ func (rb *Buffer[T]) Append(value T) int {
 	return rb.offset + rb.size - 1
 }
 
-// At retrieves the value at a specific absolute index in the buffer.
-//
-// Parameters:
-// - index: The absolute index of the element (not relative to the buffer's start).
-//
-// Returns:
-// - The value at the specified index.
-//
-// Panics:
-//   - If the index is out of range (less than RangeFirst() or greater than or
-//     equal to RangeLen()).
+// At retrieves the value at the specified absolute index in the buffer. It
+// panics if the index is out of range (less than RangeFirst() or greater than
+// or equal to RangeLen()).
 func (rb *Buffer[T]) At(index int) T {
 	rb.mu.RLock()
 	defer rb.mu.RUnlock()
@@ -119,14 +88,9 @@ func (rb *Buffer[T]) At(index int) T {
 	return rb.data[nativeIdx]
 }
 
-// Set updates the value at a specific absolute index in the buffer.
-//
-// Parameters:
-// - index: The absolute index of the element to update.
-// - value: The new value to set at the specified index.
-//
-// Panics:
-// - If the index is out of bounds (less than RangeFirst() or greater than or equal to RangeLen()).
+// Set updates the value at the specified absolute index in the buffer. It
+// panics if the index is out of bounds (less than RangeFirst() or greater than
+// or equal to RangeLen()).
 func (rb *Buffer[T]) Set(index int, value T) {
 	rb.mu.Lock()
 	defer rb.mu.Unlock()
@@ -135,9 +99,6 @@ func (rb *Buffer[T]) Set(index int, value T) {
 }
 
 // Len returns the current number of elements in the buffer.
-//
-// Returns:
-// - The number of valid elements in the buffer.
 func (rb *Buffer[T]) Len() int {
 	rb.mu.RLock()
 	defer rb.mu.RUnlock()
@@ -145,10 +106,8 @@ func (rb *Buffer[T]) Len() int {
 	return rb.size
 }
 
-// Cap returns the current capacity of the buffer.
-//
-// Returns:
-// - The maximum number of elements the buffer can hold without resizing.
+// Cap returns the current capacity of the buffer, indicating the maximum
+// number of elements it can hold without resizing.
 func (rb *Buffer[T]) Cap() int {
 	rb.mu.RLock()
 	defer rb.mu.RUnlock()
@@ -156,18 +115,10 @@ func (rb *Buffer[T]) Cap() int {
 	return len(rb.data)
 }
 
-// Resize adjusts the capacity of the buffer.
-//
-// Parameters:
-// - newLen: The new capacity of the buffer.
-//
-// Panics:
-// - If the new capacity is smaller than the current number of elements in the buffer (Len()).
-//
-// Notes:
-// - Resize preserves the existing elements and their order.
-// - If the new capacity is greater than the current capacity, the buffer is expanded.
-// - If the new capacity is smaller but still sufficient to hold all current elements, the buffer is compacted.
+// Resize adjusts the capacity of the buffer. It panics if newLen is smaller
+// than the current number of elements (Len()). The resize operation preserves
+// the existing elements and their order. If the new capacity is greater, the
+// buffer is expanded; if smaller but sufficient, the buffer is compacted.
 func (rb *Buffer[T]) Resize(newLen int) {
 	rb.mu.Lock()
 	defer rb.mu.Unlock()
@@ -175,13 +126,9 @@ func (rb *Buffer[T]) Resize(newLen int) {
 	rb.internalResize(newLen)
 }
 
-// Discard removes a specified number of elements from the start of the buffer.
-//
-// Parameters:
-// - count: The number of elements to remove.
-//
-// Panics:
-// - If count is greater than Len().
+// Discard removes the specified number of elements from the start of the
+// buffer. It panics if count is greater than the current number of elements
+// (Len()).
 func (rb *Buffer[T]) Discard(count int) {
 	rb.mu.Lock()
 	defer rb.mu.Unlock()
@@ -207,15 +154,10 @@ func (rb *Buffer[T]) Empty() {
 
 // Range Iteration Methods
 
-// Range calls the provided function for each element in the buffer.
-//
-// Parameters:
-//   - yieldFunc: A callback function invoked with the absolute index and value of each element.
-//     If the callback returns false, the iteration stops.
-//
-// Thread Safety:
-//   - Locks the buffer only to extract a snapshot of its state, allowing
-//     concurrent operations during iteration.
+// Range iterates over each element in the buffer, calling yieldFunc with the
+// absolute index and value of each element. If yieldFunc returns false, the
+// iteration stops. The buffer is locked only to extract a snapshot of its
+// state, allowing concurrent operations during iteration.
 func (rb *Buffer[T]) Range(yieldFunc func(index int, value T) bool) {
 	var data []T
 
@@ -232,10 +174,8 @@ func (rb *Buffer[T]) Range(yieldFunc func(index int, value T) bool) {
 	rb.internalRange(yieldFunc, data, startIndex)
 }
 
-// RangeFirst returns the absolute index of the first valid element in the buffer.
-//
-// Returns:
-// - The absolute index of the first valid element.
+// RangeFirst returns the absolute index of the first valid element in the
+// buffer.
 func (rb *Buffer[T]) RangeFirst() int {
 	rb.mu.RLock()
 	defer rb.mu.RUnlock()
@@ -243,10 +183,8 @@ func (rb *Buffer[T]) RangeFirst() int {
 	return rb.offset
 }
 
-// RangeLen returns the absolute index just past the last valid element in the buffer.
-//
-// Returns:
-// - The absolute index after the last valid element.
+// RangeLen returns the absolute index just past the last valid element in the
+// buffer.
 func (rb *Buffer[T]) RangeLen() int {
 	rb.mu.RLock()
 	defer rb.mu.RUnlock()
@@ -256,10 +194,8 @@ func (rb *Buffer[T]) RangeLen() int {
 
 // Slice Conversion Methods
 
-// ToSlice converts the buffer's contents into a linear slice.
-//
-// Returns:
-// - A slice containing all elements in the buffer.
+// ToSlice converts the buffer's contents into a linear slice. It returns a
+// []T containing all elements in the buffer.
 func (rb *Buffer[T]) ToSlice() []T {
 	rb.mu.RLock()
 	defer rb.mu.RUnlock()
@@ -267,10 +203,9 @@ func (rb *Buffer[T]) ToSlice() []T {
 	return rb.internalToSlice()
 }
 
-// ToMap converts the Buffer into a map where keys are absolute indices and values are the buffer elements.
-//
-// Returns:
-// - A map[int]T containing all elements in the buffer, keyed by their absolute indices.
+// ToMap converts the buffer's contents into a map where keys are absolute
+// indices and values are the buffer elements. It returns a map[int]T
+// containing all elements in the buffer, keyed by their absolute indices.
 func (rb *Buffer[T]) ToMap() map[int]T {
 	rb.mu.RLock()
 	defer rb.mu.RUnlock()
@@ -321,10 +256,8 @@ func (rb *Buffer[T]) internalRange(yieldFunc func(index int, value T) bool, data
 	}
 }
 
-// internalResize resizes the buffer to a new capacity.
-//
-// Panics:
-// - If the new capacity is smaller than the current size of the buffer.
+// internalResize resizes the buffer to a new capacity. Panics if the new
+// capacity is smaller than the current size of the buffer.
 func (rb *Buffer[T]) internalResize(newLen int) {
 	if newLen < rb.size {
 		panic(fmt.Sprintf("Attempted to resize to %d elements (not big enough to hold %d elements)", newLen, rb.size))
@@ -349,9 +282,7 @@ func (rb *Buffer[T]) internalResize(newLen int) {
 }
 
 // toNativeIndex converts an absolute index to a native (internal) index.
-//
-// Panics:
-// - If the index is out of bounds.
+// Panics if the index is out of bounds.
 func (rb *Buffer[T]) toNativeIndex(absIdx int) int {
 	if absIdx < rb.offset {
 		panic(fmt.Sprintf("Attempted to access index %d before initial index %d", absIdx, rb.offset))
