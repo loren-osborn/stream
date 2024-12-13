@@ -105,8 +105,13 @@ endef
 
 DOCS_OUTPUT_DIR := doc
 
-PROD_GO_FILES = $(patsubst ./%,%,$(filter-out %_test.go,$(shell find . -type f -name '*.go')))
+GO_FILES := $(shell find . -type f -name '*.go')
+PROD_GO_FILES = $(patsubst ./%,%,$(filter-out %_test.go,$(GO_FILES)))
 PROD_GO_PACKAGES = $(patsubst ./%,%,$(patsubst %/,%,$(sort $(dir $(PROD_GO_FILES)))))
+# TODO: Ignore test files in directories with now prod files
+TEST_GO_FILES = $(patsubst ./%,%,$(filter %_test.go,$(GO_FILES)))
+EXAMPLE_GO_FILES = $(shell grep -lE '\bfunc\s+Example' $(TEST_GO_FILES))
+NON_EXAMPLE_TEST_GO_FILES = $(filter-out $(EXAMPLE_GO_FILES),$(TEST_GO_FILES))
 
 ##
 # @brief Find the production (non-test) *.go file in a given directory sorted by age
@@ -118,6 +123,15 @@ PROD_GO_PACKAGES = $(patsubst ./%,%,$(patsubst %/,%,$(sort $(dir $(PROD_GO_FILES
 AGE_SORTED_GO_FILES_IN_PKG = $(patsubst ./%,%,$(filter-out %_test.go,$(shell ls -t1 $(1)/*.go)))
 
 ##
+# @brief Find the production and example *.go file in a given directory sorted by age
+#
+# @param 1 The directory to search
+# 
+# @return The paths of the prod Go file in the directory.
+#
+AGE_SORTED_GO_DOC_FILES_IN_PKG = $(patsubst ./%,%,$(filter-out $(NON_EXAMPLE_TEST_GO_FILES),$(shell ls -t1 $(1)/*.go)))
+
+##
 # @brief Find the newest production (non-test) *.go file in the given directory
 #
 # @param 1 The directory to search
@@ -125,6 +139,15 @@ AGE_SORTED_GO_FILES_IN_PKG = $(patsubst ./%,%,$(filter-out %_test.go,$(shell ls 
 # @return The path of the newest prod Go file in the directory.
 #
 NEWEST_GO_FILE = $(word 1,$(call AGE_SORTED_GO_FILES_IN_PKG,$(1)))
+
+##
+# @brief Find the newest production and example *.go file in the given directory
+#
+# @param 1 The directory to search
+# 
+# @return The path of the newest prod Go file in the directory.
+#
+NEWEST_GO_DOC_FILE = $(word 1,$(call AGE_SORTED_GO_DOC_FILES_IN_PKG,$(1)))
 
 ##
 # @brief Flatten deep path name into a flattened filename
@@ -244,7 +267,7 @@ PACKAGE_DOCS_BLOBS := $(foreach \
 		$(SPACE),$\
 		$(COMMA),$\
 		$(call \
-			AGE_SORTED_GO_FILES_IN_PKG,$\
+			AGE_SORTED_GO_DOC_FILES_IN_PKG,$\
 			$(pkg)$\
 		)$\
 	):$\

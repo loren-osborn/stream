@@ -83,6 +83,75 @@ func TestInternalNewPrimeSource(t *testing.T) {
 	VerifyPrimeSourcePull(t, source)
 }
 
+// Example_nonblocking demonstrates using a Source in non-blocking mode. When Pull is called with
+// stream.NonBlocking, it either returns the next value immediately if available, or returns
+// stream.ErrNoDataYet if the next sieve value is not prime. This allows the caller to treat
+// such cases as "no data available yet," enabling other work to proceed without blocking.
+//
+// The example uses a "fixed sieve" method for prime generation, which is intentionally
+// inefficient to focus on demonstrating the Source interface and non-blocking behavior.
+//
+// The asterisks coorespond to the numbers 49, 77, and 91 that are all multiples of 7.
+func Example_nonblocking() {
+	// Create a prime source seeded from the first 3 primes.
+	primeStream := NewPrimeSource(3)
+
+	for {
+		// Pull non-blocking from the source. If the next sieve value is not prime,
+		// Pull returns stream.ErrNoDataYet instead of blocking.
+		val, err := primeStream.Pull(stream.NonBlocking)
+
+		if errors.Is(err, stream.ErrNoDataYet) {
+			fmt.Println("*")
+
+			continue
+		}
+
+		if err != nil {
+			panic(err)
+		}
+
+		if val == nil {
+			panic("Unexpected nil without error")
+		}
+
+		// Stop once we reach a certain threshold.
+		if *val > 100 {
+			break
+		}
+
+		fmt.Println(*val)
+	}
+	// Output: 2
+	// 3
+	// 5
+	// 7
+	// 11
+	// 13
+	// 17
+	// 19
+	// 23
+	// 29
+	// 31
+	// 37
+	// 41
+	// 43
+	// 47
+	// *
+	// 53
+	// 59
+	// 61
+	// 67
+	// 71
+	// 73
+	// *
+	// 79
+	// 83
+	// 89
+	// *
+	// 97
+}
+
 func VerifyPrimeBootstrap(t *testing.T, primes []int, primeStream *PrimeSource) {
 	t.Helper()
 
@@ -164,9 +233,8 @@ func slicesEqual[T comparable](aSlice, bSlice []T) bool {
 	return true
 }
 
-// calculateSieveSize calculates the sieve size for a list of primes. This is
-// far from the most efficient way to do this, but it's serving as an example of
-// how to use sources.
+// calculateSieveSize reduces a slice of primes by multiplying them, providing
+// he size of the sieve. Internally this uses a Reducer and a SliceSource.
 func calculateSieveSize(smallPrimes []int) int {
 	source := stream.NewSliceSource(smallPrimes)
 
@@ -180,7 +248,12 @@ func calculateSieveSize(smallPrimes []int) int {
 	return result
 }
 
-// predictSieveCapacity calculates the number of members in the sieve.
+// predictSieveCapacity is a similar reducer-based calculation that helps size
+// the underlying sieve array by calculating the number of prime candidates in
+// the sieve. This is the product of (prime - 1) for each small prime,
+// representing the numbers not divisible by any of the small primes within
+// the sieve's range. For instance a 30 member sieve (2*3*5) has 8 prime
+// candidates (1*2*4), so the slice only needs a capacity of 8.
 func predictSieveCapacity(smallPrimes []int) int {
 	source := stream.NewSliceSource(smallPrimes)
 
@@ -194,7 +267,9 @@ func predictSieveCapacity(smallPrimes []int) int {
 	return result
 }
 
-// findNonDivisibleNumbers calculates the members of the sieve.
+// findNonDivisibleNumbers generates all numbers in the range [0, sieveSize) that
+// are not divisible by any of the given small primes. It uses a custom SourceFunc,
+// a Filter, and a SliceSink to achieve this.
 func findNonDivisibleNumbers(smallPrimes []int, sieveSize int) []int {
 	sieveCapacity := predictSieveCapacity(smallPrimes)
 	nonDivNums := make([]int, 0, sieveCapacity)
@@ -210,6 +285,8 @@ func findNonDivisibleNumbers(smallPrimes []int, sieveSize int) []int {
 
 		return nil, stream.ErrEndOfData
 	}, func() {})
+
+	// Filter out values divisible by any of the small primes.
 	filter := stream.NewFilter(source, func(val int) bool {
 		for _, factor := range smallPrimes {
 			if val%factor == 0 {
@@ -232,7 +309,10 @@ func findNonDivisibleNumbers(smallPrimes []int, sieveSize int) []int {
 	return nonDivNums
 }
 
-// PrimeSource emits a list of prime integers.
+// PrimeSource is a Source that provides prime numbers. It begins by returning
+// a known list of small primes, then uses a fixed sieve pattern to discover new ones.
+// The prime generation is deliberately inefficient to highlight the source's behavior,
+// especially its non-blocking Pull.
 type PrimeSource struct {
 	smallPrimes []int
 	sieveSize   int
@@ -241,9 +321,9 @@ type PrimeSource struct {
 	counter     int // start at 0 - len(smallPrimes)
 }
 
-// NewPrimeSource creates a new PrimeSource to generate primes from a fixed sieve.
-// While not the most efficient prime generator, it gives an opportunity to demo
-// non-blocking source behavior.
+// NewPrimeSource builds a PrimeSource given a count of initial small primes
+// from the bootstrap sieve of []int{2} by streaming from a base source and
+// collecting the desired number with a Taker and a SliceSink.
 func NewPrimeSource(sievePrimeCount int) *PrimeSource {
 	if sievePrimeCount < 1 {
 		panic(fmt.Sprintf("invalid sievePrimeCount: %d", sievePrimeCount))
@@ -266,7 +346,8 @@ func NewPrimeSource(sievePrimeCount int) *PrimeSource {
 	return bootstrapPrimeSource(*primes)
 }
 
-// bootstrapPrimeSource creates a new PrimeSource to generate primes from a fixed sieve.
+// bootstrapPrimeSource creates a new PrimeSource to generate primes from a
+// fixed sieve. It is a helper for NewPrimeSource().
 func bootstrapPrimeSource(smallPrimes []int) *PrimeSource {
 	sieveSize := calculateSieveSize(smallPrimes)
 	nonDivisible := findNonDivisibleNumbers(smallPrimes, sieveSize)
@@ -280,7 +361,10 @@ func bootstrapPrimeSource(smallPrimes []int) *PrimeSource {
 	}
 }
 
-// Pull emits the next prime element.
+// Pull returns the next prime. In NonBlocking mode, if the next sieve value is not prime,
+// Pull returns stream.ErrNoDataYet instead of blocking, allowing the caller to treat
+// this condition as "no data available yet." In Blocking mode, it continues searching
+// until the next prime is found.
 func (ps *PrimeSource) Pull(blocks stream.BlockingType) (*int, error) {
 	if ps.counter < 0 {
 		idx := len(ps.smallPrimes) + ps.counter
@@ -324,5 +408,4 @@ func (ps *PrimeSource) Pull(blocks stream.BlockingType) (*int, error) {
 }
 
 // Close tells the source no more data will be Pull()ed.
-func (ps *PrimeSource) Close() {
-}
+func (ps *PrimeSource) Close() {}
