@@ -15,9 +15,16 @@ type MultiReaderBuf[T any] struct {
 	readers []*Reader[T]
 }
 
-// Reader provides an interface for reading from a MultiReaderBuf. Each Reader
-// maintains its own view of the buffer, allowing for independent consumption of
-// data.
+// Reader provides an interface for reading from a MultiReaderBuf.
+// It serves two primary roles:
+//
+//  1. State Management: Internally maintains state information specific to
+//     its associated reader within the MultiReaderBuf.
+//  2. Proxy Interface: Acts as a proxy, enabling object-oriented method
+//     calls to interact with the MultiReaderBuf.
+//
+// By combining these roles, Reader offers both efficient state handling and a
+// convenient API for buffer interactions.
 type Reader[T any] struct {
 	owner    *MultiReaderBuf[T]
 	readerID int
@@ -104,16 +111,9 @@ func (mrb *MultiReaderBuf[T]) Resize(newLen int) {
 // Reader methods
 
 // ReaderPeekFirst retrieves the first element visible to the specified reader
-// without consuming it.
-//
-// Parameters:
-// - readerID: The ID of the reader.
-//
-// Returns:
-// - A pointer to the first element, or nil if the buffer is empty.
-//
-// Errors:
-// - io.EOF: If no data is available for the specified reader.
+// without consuming it. It returns a pointer to the first element or nil if
+// the buffer is empty. It returns io.EOF if no data is available for the
+// reader. It panics if the readerID has been closed or is invalid.
 func (mrb *MultiReaderBuf[T]) ReaderPeekFirst(readerID int) (*T, error) {
 	mrb.mu.RLock()
 	defer mrb.mu.RUnlock()
@@ -129,17 +129,11 @@ func (mrb *MultiReaderBuf[T]) ReaderPeekFirst(readerID int) (*T, error) {
 	return &result, nil
 }
 
-// ReaderConsumeFirst retrieves the first element visible to the specified reader
-// and removes it from the reader's view.
-//
-// Parameters:
-// - readerID: The ID of the reader.
-//
-// Returns:
-// - A pointer to the consumed element, or nil if the buffer is empty.
-//
-// Errors:
-// - io.EOF: If no data is available for the specified reader.
+// ReaderConsumeFirst retrieves the first element visible to the specified
+// reader and removes it from the reader's view. It returns a pointer to the
+// consumed element or nil if the buffer is empty. It returns io.EOF if no
+// data is available for the reader. It panics if the readerID has been
+// closed or is invalid.
 func (mrb *MultiReaderBuf[T]) ReaderConsumeFirst(readerID int) (*T, error) {
 	mrb.mu.Lock()
 	defer mrb.mu.Unlock()
@@ -157,17 +151,10 @@ func (mrb *MultiReaderBuf[T]) ReaderConsumeFirst(readerID int) (*T, error) {
 	return &result, nil
 }
 
-// ReaderAt retrieves the value at a specific absolute index from the POV of reader readerID.
-//
-// Parameters:
-// - readerID: The reader corresponding to our perspective.
-// - index: The absolute index of the element.
-//
-// Returns:
-// - The value at the specified index.
-//
-// Panics:
-// - If the index is out of bounds (less than RangeFirst() or greater than or equal to RangeLen()).
+// ReaderAt retrieves the value at the specified absolute index from the
+// perspective of the reader identified by readerID. It panics if the readerID
+// has been closed or is invalid, or if the index is out of bounds (less than
+// RangeFirst() or greater than or equal to RangeLen()).
 func (mrb *MultiReaderBuf[T]) ReaderAt(readerID int, index int) T {
 	mrb.mu.RLock()
 	defer mrb.mu.RUnlock()
@@ -186,7 +173,10 @@ func (mrb *MultiReaderBuf[T]) ReaderAt(readerID int, index int) T {
 	return mrb.data.At(index)
 }
 
-// ReaderDiscard discards a given number of elements for the POV of reader readerID.
+// ReaderDiscard discards the specified number of elements from the perspective
+// of the reader identified by readerID. It panics if attempting to discard
+// more elements than are visible to the reader or if the readerID
+// has been closed or is invalid.
 func (mrb *MultiReaderBuf[T]) ReaderDiscard(readerID int, count int) {
 	mrb.mu.Lock()
 	defer mrb.mu.Unlock()
@@ -194,7 +184,9 @@ func (mrb *MultiReaderBuf[T]) ReaderDiscard(readerID int, count int) {
 	mrb.internalReaderDiscard(readerID, count)
 }
 
-// ReaderRangeFirst gives the index of the first element from the POV of reader readerID.
+// ReaderRangeFirst returns the absolute index of the first element visible to
+// the reader identified by readerID. It panics if the readerID has been
+// closed or is invalid.
 func (mrb *MultiReaderBuf[T]) ReaderRangeFirst(readerID int) int {
 	mrb.mu.RLock()
 	defer mrb.mu.RUnlock()
@@ -204,8 +196,9 @@ func (mrb *MultiReaderBuf[T]) ReaderRangeFirst(readerID int) int {
 	return mrb.readers[readerID].offset
 }
 
-// ReaderRangeLen returns the absolute index just past the last valid element in
-// the buffer from the POV of reader readerID.
+// ReaderRangeLen returns the absolute index just past the last valid element
+// in the buffer from the perspective of the reader identified by readerID.
+// It panics if the readerID has been closed or is invalid.
 func (mrb *MultiReaderBuf[T]) ReaderRangeLen(readerID int) int {
 	mrb.mu.RLock()
 	defer mrb.mu.RUnlock()
@@ -215,7 +208,10 @@ func (mrb *MultiReaderBuf[T]) ReaderRangeLen(readerID int) int {
 	return mrb.data.RangeLen()
 }
 
-// ReaderRange ranges over the ring buffer from the POV of reader readerID.
+// ReaderRange iterates over the buffer from the perspective of the reader
+// identified by readerID, calling yieldFunc for each element. If yieldFunc
+// returns false, the iteration stops. It panics if the readerID has
+// been closed or is invalid.
 func (mrb *MultiReaderBuf[T]) ReaderRange(readerID int, yieldFunc func(index int, value T) bool) {
 	var data []T
 
@@ -234,7 +230,8 @@ func (mrb *MultiReaderBuf[T]) ReaderRange(readerID int, yieldFunc func(index int
 	mrb.internalRange(yieldFunc, data, startIndex)
 }
 
-// ReaderLen returns the length of the ring buffer from the POV of reader readerID.
+// ReaderLen returns the number of elements visible to the reader identified by
+// readerID. It panics if the readerID has been closed or is invalid.
 func (mrb *MultiReaderBuf[T]) ReaderLen(readerID int) int {
 	mrb.mu.RLock()
 	defer mrb.mu.RUnlock()
@@ -242,10 +239,9 @@ func (mrb *MultiReaderBuf[T]) ReaderLen(readerID int) int {
 	return mrb.internalReaderLen(readerID)
 }
 
-// ReaderToSlice converts the Buffer into a slice from the POV of reader readerID.
-//
-// Returns:
-//   - A []T containing all elements reader readerID can see in the buffer.
+// ReaderToSlice converts the buffer's contents into a slice from the
+// perspective of the reader identified by readerID. It panics if the readerID
+// has been closed or is invalid.
 func (mrb *MultiReaderBuf[T]) ReaderToSlice(readerID int) []T {
 	mrb.mu.RLock()
 	defer mrb.mu.RUnlock()
@@ -253,11 +249,10 @@ func (mrb *MultiReaderBuf[T]) ReaderToSlice(readerID int) []T {
 	return mrb.internalReaderToSlice(readerID)
 }
 
-// ReaderToMap converts the Buffer into a map from the POV of reader readerID.
-//
-// Returns:
-//   - A map[int]T containing all elements reader readerID can see in the buffer,
-//     keyed by their absolute indices.
+// ReaderToMap converts the buffer's contents into a map from the perspective
+// of the reader identified by readerID. The keys are absolute indices, and the
+// values are the buffer elements. It panics if the readerID has been closed or
+// is invalid.
 func (mrb *MultiReaderBuf[T]) ReaderToMap(readerID int) map[int]T {
 	mrb.mu.RLock()
 	defer mrb.mu.RUnlock()
@@ -267,8 +262,10 @@ func (mrb *MultiReaderBuf[T]) ReaderToMap(readerID int) map[int]T {
 
 // // Reader management
 
-// CloseReader closes the reader with the specified readerID. Once closed,
-// any operation on this reader will result in a panic.
+// CloseReader closes the reader with the specified readerID. Once closed, any
+// operation on this Reader is invalid and will panic. Closing a reader signals
+// that the reader no longer needs to consume data, allowing the buffer to
+// manage its data accordingly.
 func (mrb *MultiReaderBuf[T]) CloseReader(readerID int) {
 	mrb.mu.Lock()
 	defer mrb.mu.Unlock()
@@ -296,8 +293,6 @@ func (mrb *MultiReaderBuf[T]) CloseReader(readerID int) {
 	// reset Reader[T] to ZeroValue before removing it can cause a race
 	// condition: instead we leave the owner and readerID intact to avoid
 	// this (illegal but still possible) race:
-	// mrb.readers[readerID].owner = nil
-	// mrb.readers[readerID].readerID = 0
 	mrb.readers[readerID].offset = 0
 	mrb.readers[readerID] = nil
 
@@ -314,17 +309,30 @@ func (mrb *MultiReaderBuf[T]) CloseReader(readerID int) {
 	}
 }
 
-// GetReader returns the reader with the specified readerID.
-func (mrb *MultiReaderBuf[T]) GetReader(readerID int) *Reader[T] {
+// Reader returns the reader associated with the given readerID. It returns
+// nil if the readerID has been closed, and panics if it is invalid.
+func (mrb *MultiReaderBuf[T]) Reader(readerID int) *Reader[T] {
 	mrb.mu.RLock()
 	defer mrb.mu.RUnlock()
 
-	mrb.internalValidateReader("getting", readerID)
+	mrb.internalValidateReaderRange(readerID)
 
 	return mrb.readers[readerID]
 }
 
-// RangeReaders iterates over readers, calling yieldFunc for each non-closed reader.
+// ReaderValid returns true if the readerID has not been closed, false if it
+// has been, and panics if it is invalid.
+func (mrb *MultiReaderBuf[T]) ReaderValid(readerID int) bool {
+	mrb.mu.RLock()
+	defer mrb.mu.RUnlock()
+
+	mrb.internalValidateReaderRange(readerID)
+
+	return mrb.readers[readerID] != nil
+}
+
+// RangeReaders iterates over all active readers, calling yieldFunc for each
+// non-closed reader. If yieldFunc returns false, the iteration stops.
 func (mrb *MultiReaderBuf[T]) RangeReaders(yieldFunc func(readerID int, reader *Reader[T]) bool) {
 	var localReaders []*Reader[T]
 
@@ -346,7 +354,7 @@ func (mrb *MultiReaderBuf[T]) RangeReaders(yieldFunc func(readerID int, reader *
 	}
 }
 
-// LenReaders returns the number of readers viewing this buffer.
+// LenReaders returns the number of readers currently viewing the buffer.
 func (mrb *MultiReaderBuf[T]) LenReaders() int {
 	result := 0
 
@@ -359,7 +367,8 @@ func (mrb *MultiReaderBuf[T]) LenReaders() int {
 	return result
 }
 
-// RangeLenReaders returns the number of reader slots allocated for this buffer.
+// RangeLenReaders returns the total number of reader slots allocated for the
+// buffer.
 func (mrb *MultiReaderBuf[T]) RangeLenReaders() int {
 	mrb.mu.RLock()
 	defer mrb.mu.RUnlock()
@@ -369,19 +378,22 @@ func (mrb *MultiReaderBuf[T]) RangeLenReaders() int {
 
 // // Reader proxy methods
 
-// PeekFirst returns a pointer to the first element from the POV of reader,
-// leaving it in place.
+// PeekFirst retrieves the first element visible to the reader without
+// consuming it. If the buffer is empty, it returns nil and io.EOF. It
+// panics if the Reader has been closed.
 func (r *Reader[T]) PeekFirst() (*T, error) {
 	return r.owner.ReaderPeekFirst(r.readerID)
 }
 
-// ConsumeFirst returns a pointer to the first element from the POV of reader,
-// removing it from visibility.
+// ConsumeFirst retrieves the first element visible to the reader and removes it
+// from visibility. If the buffer is empty, it returns nil and io.EOF. It
+// panics if the Reader has been closed.
 func (r *Reader[T]) ConsumeFirst() (*T, error) {
 	return r.owner.ReaderConsumeFirst(r.readerID)
 }
 
-// ID returns the reader's readerID.
+// ID returns the reader's readerID. It is permissible to call this on a closed
+// reader.
 func (r *Reader[T]) ID() int {
 	r.owner.mu.RLock()
 	defer r.owner.mu.RUnlock()
@@ -389,32 +401,32 @@ func (r *Reader[T]) ID() int {
 	return r.readerID
 }
 
-//
+// Valid reports if a readerID is still open. It is permissible to call this
+// on a closed reader.
+func (r *Reader[T]) Valid() bool {
+	r.owner.mu.RLock()
+	defer r.owner.mu.RUnlock()
 
-// At retrieves the value at a specific absolute index from the POV of reader.
-//
-// Parameters:
-// - readerID: The reader corresponding to our perspective.
-// - index: The absolute index of the element.
-//
-// Returns:
-// - The value at the specified index.
-//
-// Panics:
-// - If the index is out of bounds (less than RangeFirst() or greater than or equal to RangeLen()).
+	return r.owner.ReaderValid(r.readerID)
+}
+
+// At retrieves the value at the specified absolute index from the reader's
+// perspective. It panics if the Reader has been closed or if the index is out
+// of bounds (less than RangeFirst() or greater than or equal to RangeLen()).
 func (r *Reader[T]) At(index int) T {
 	return r.owner.ReaderAt(r.readerID, index)
 }
 
-// Discard discards a given number of elements for the POV of reader.
+// Discard discards the specified number of elements from the perspective
+// of the reader identified by the Reader. It panics if attempting to discard
+// more elements than are visible to the reader or if the Reader
+// has been closed or is invalid.
 func (r *Reader[T]) Discard(count int) {
-	r.owner.mu.Lock()
-	defer r.owner.mu.Unlock()
-
-	r.owner.internalReaderDiscard(r.readerID, count)
+	r.owner.ReaderDiscard(r.readerID, count)
 }
 
-// RangeFirst gives the index of the first element from the POV of reader.
+// RangeFirst returns the absolute index of the first element visible to
+// the Reader. It panics if the Reader has been closed or is invalid.
 func (r *Reader[T]) RangeFirst() int {
 	return r.owner.ReaderRangeFirst(r.readerID)
 }
@@ -425,56 +437,42 @@ func (r *Reader[T]) RangeLen() int {
 	return r.owner.ReaderRangeLen(r.readerID)
 }
 
-// Range ranges over the ring buffer from the POV of the reader.
+// Range iterates over the buffer from the perspective of the reader, calling
+// yieldFunc for each element. If yieldFunc returns false, the iteration stops.
+// It panics if the reader has been closed.
 func (r *Reader[T]) Range(yieldFunc func(index int, value T) bool) {
-	var data []T
-
-	var startIndex int
-
-	func() { // Use an anonymous function to ensure defer unlocks the mutex
-		r.owner.mu.RLock()
-		defer r.owner.mu.RUnlock()
-
-		data = r.owner.internalReaderToSlice(r.readerID) // Create a local copy of the data
-		startIndex = r.owner.readers[r.readerID].offset  // Capture the starting absolute index
-	}()
-
-	r.owner.internalRange(yieldFunc, data, startIndex)
+	r.owner.ReaderRange(r.readerID, yieldFunc)
 }
 
-// Len returns the length of the ring buffer from the POV of the reader.
+// Len returns the number of elements visible to the reader's perspective. It
+// panics if the reader has been closed.
 func (r *Reader[T]) Len() int {
-	r.owner.mu.RLock()
-	defer r.owner.mu.RUnlock()
-
-	return r.owner.internalReaderLen(r.readerID)
+	return r.owner.ReaderLen(r.readerID)
 }
 
-// ToSlice converts the Buffer into a slice from the POV of reader readerID.
-//
-// Returns:
-//   - A []T containing all elements reader readerID can see in the buffer.
+// ToSlice converts the reader's perspective of the buffer's contents into a
+// slice. It panics if the reader has been closed.
 func (r *Reader[T]) ToSlice() []T {
 	return r.owner.ReaderToSlice(r.readerID)
 }
 
-// ToMap converts the Buffer into a map from the POV of the reader.
-//
-// Returns:
-//   - A map[int]T containing all elements reader readerID can see in the buffer,
-//     keyed by their absolute indices.
+// ToMap converts the reader's perspective of the buffer's contents into a map.
+// The keys are absolute indices, and the values are the buffer elements. It
+// panics if the reader has been closed.
 func (r *Reader[T]) ToMap() map[int]T {
-	r.owner.mu.RLock()
-	defer r.owner.mu.RUnlock()
-
-	return r.owner.internalReaderToMap(r.readerID)
+	return r.owner.ReaderToMap(r.readerID)
 }
 
-// We panic on range error and data inconsistency, and return false on other errors.
-func (mrb *MultiReaderBuf[T]) internalValidateReader(operation string, readerID int) {
+// We panic on range error only.
+func (mrb *MultiReaderBuf[T]) internalValidateReaderRange(readerID int) {
 	if (readerID < 0) || (readerID >= len(mrb.readers)) {
 		panic(fmt.Sprintf("Reader ID %d is out of range (0 to %d)", readerID, len(mrb.readers)-1))
 	}
+}
+
+// We panic on range error, closed readers and data inconsistency.
+func (mrb *MultiReaderBuf[T]) internalValidateReader(operation string, readerID int) {
+	mrb.internalValidateReaderRange(readerID)
 
 	if mrb.readers[readerID] == nil {
 		panic(fmt.Sprintf("%s closed reader %d", operation, readerID))

@@ -2,6 +2,7 @@ package ringbuffer_test
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"reflect"
 	"sync"
@@ -194,9 +195,9 @@ func TestMultiReaderBuf_Range_FromReaderObj(t *testing.T) {
 			)
 		}
 
-		if readerFromFunc := ringBuf.GetReader(readerID); readerFromFunc != reader {
+		if readerFromFunc := ringBuf.Reader(readerID); readerFromFunc != reader {
 			t.Errorf(
-				"ringBuf.GetReader() gave reader %v when yield function given "+
+				"ringBuf.Reader() gave reader %v when yield function given "+
 					"reader %v!",
 				readerFromFunc,
 				reader,
@@ -761,12 +762,14 @@ func TestReader_PeekFirst(t *testing.T) {
 		t.Parallel()
 
 		mrb := ringbuffer.NewMultiReaderBuf[int](4, 1)
-		r := mrb.GetReader(0)
+		r := mrb.Reader(0)
 
 		_, err := r.PeekFirst()
 
 		if err == nil {
 			t.Errorf("Expected error peeking empty reader, got nil")
+		} else if !errors.Is(err, io.EOF) {
+			t.Errorf("expected error %v, got %v", io.EOF, err)
 		}
 	})
 
@@ -774,7 +777,7 @@ func TestReader_PeekFirst(t *testing.T) {
 		t.Parallel()
 
 		mrb := ringbuffer.NewMultiReaderBuf[int](4, 1)
-		r := mrb.GetReader(0)
+		r := mrb.Reader(0)
 
 		mrb.Append(10)
 
@@ -793,11 +796,13 @@ func TestReader_ConsumeFirst(t *testing.T) {
 		t.Parallel()
 
 		mrb := ringbuffer.NewMultiReaderBuf[int](4, 1)
-		r := mrb.GetReader(0)
+		r := mrb.Reader(0)
 		_, err := r.ConsumeFirst()
 
 		if err == nil {
 			t.Errorf("Expected error consuming empty reader, got nil")
+		} else if !errors.Is(err, io.EOF) {
+			t.Errorf("expected error %v, got %v", io.EOF, err)
 		}
 	})
 
@@ -805,7 +810,7 @@ func TestReader_ConsumeFirst(t *testing.T) {
 		t.Parallel()
 
 		mrb := ringbuffer.NewMultiReaderBuf[int](4, 1)
-		reader := mrb.GetReader(0)
+		reader := mrb.Reader(0)
 
 		mrb.Append(5)
 		mrb.Append(6)
@@ -832,7 +837,7 @@ func TestReader_At(t *testing.T) {
 
 	// Dependencies and single scenario, no parallel sub-tests here.
 	mrb := ringbuffer.NewMultiReaderBuf[int](4, 1)
-	reader := mrb.GetReader(0)
+	reader := mrb.Reader(0)
 
 	mrb.Append(10)
 	mrb.Append(11)
@@ -866,7 +871,7 @@ func TestReader_ToSlice(t *testing.T) {
 		t.Parallel()
 
 		mrb := ringbuffer.NewMultiReaderBuf[int](4, 1)
-		r := mrb.GetReader(0)
+		r := mrb.Reader(0)
 		emptySlice := r.ToSlice()
 
 		if len(emptySlice) != 0 {
@@ -878,7 +883,7 @@ func TestReader_ToSlice(t *testing.T) {
 		t.Parallel()
 
 		mrb := ringbuffer.NewMultiReaderBuf[int](4, 1)
-		reader := mrb.GetReader(0)
+		reader := mrb.Reader(0)
 
 		mrb.Append(100)
 		mrb.Append(200)
@@ -905,7 +910,17 @@ func TestMultiReaderBuf_ErrorConditions(t *testing.T) {
 		t.Parallel()
 
 		mrb := ringbuffer.NewMultiReaderBuf[int](4, 2)
+		reader := mrb.Reader(1)
+
+		if !reader.Valid() {
+			t.Errorf("Expected reader 1 valid, got invalid")
+		}
+
 		mrb.CloseReader(1)
+
+		if reader.Valid() {
+			t.Errorf("Expected reader 1 invalid, got valid")
+		}
 
 		defer func() {
 			expecting := "peeking from closed reader 1"
@@ -1388,4 +1403,16 @@ func TestMultiReaderBuf_ReaderDiscard_ClosedReader(t *testing.T) {
 
 	// Attempt to discard from the closed reader
 	mrb.ReaderDiscard(0, 1)
+}
+
+// ExampleReader demonstrates how to use Readers as proxy objects.
+func ExampleReader() {
+	mrb := ringbuffer.NewMultiReaderBuf[int](10, 2)
+	reader := mrb.Reader(1)
+
+	mrb.Append(100)
+
+	value := reader.At(0)
+
+	fmt.Println(value) // Output: 100
 }
