@@ -50,54 +50,35 @@
 package stream
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"io"
 )
-
-// BlockingType is used to indicate whether a Pull call should block or not.
-type BlockingType bool
-
-const (
-	// NonBlocking indicates that the Pull operation should return immediately
-	// if no data is available.
-	NonBlocking BlockingType = false
-
-	// Blocking indicates that the Pull operation should wait until data is available.
-	Blocking BlockingType = true
-)
-
-// ErrEndOfData is returned by Pull when the source has no more data to produce.
-var ErrEndOfData = errors.New("end of data")
-
-// ErrNoDataYet is returned by Pull(NonBlocking) when the source temporarily
-// runs out of data. This is a sentinel condition and only indicates transient
-// system state. This error should only be considered "expected" in NonBlocking
-// mode and is only handled as sentinel error in this mode.
-var ErrNoDataYet = errors.New("data not ready")
 
 // Source represents a source of data that can pull elements one at a time.
 type Source[T any] interface {
-	Pull(block BlockingType) (*T, error) // Returns the next element.
-	Close()                              // Lets the consumer tell the source that no more data will be Pull()ed.
+	Pull(ctx context.Context) (*T, error) // Returns the next element.
+	Close()                               // Lets the consumer tell the source that no more data will be Pull()ed.
 }
 
 // sourceFunc is simple way to turn a lambda into a Source.
 type sourceFunc[T any] struct {
-	srcFunc   func(BlockingType) (*T, error)
+	srcFunc   func(context.Context) (*T, error)
 	closeFunc func()
 }
 
 // Pull proxies the call to the source lambda.
-func (sf *sourceFunc[T]) Pull(blocks BlockingType) (*T, error) {
+func (sf *sourceFunc[T]) Pull(ctx context.Context) (*T, error) {
 	var val *T
 
-	err := ErrEndOfData
+	err := io.EOF
 
-	if sf.srcFunc != nil {
-		val, err = sf.srcFunc(blocks)
+	if (ctx.Err() == nil) && (sf.srcFunc != nil) {
+		val, err = sf.srcFunc(ctx)
 	}
 
-	if errors.Is(err, ErrEndOfData) {
+	if (ctx.Err() != nil) || errors.Is(err, io.EOF) {
 		sf.Close()
 	}
 
@@ -115,7 +96,7 @@ func (sf *sourceFunc[T]) Close() {
 }
 
 // SourceFunc lets a lambda become a source.
-func SourceFunc[T any](srcFunc func(BlockingType) (*T, error), closeFunc func()) Source[T] {
+func SourceFunc[T any](srcFunc func(context.Context) (*T, error), closeFunc func()) Source[T] {
 	return &sourceFunc[T]{
 		srcFunc:   srcFunc,
 		closeFunc: closeFunc,
@@ -132,12 +113,12 @@ func NewSliceSource[T any](data []T) *SliceSource[T] {
 	return &SliceSource[T]{data: data}
 }
 
-// Pull emits the next element from the slice or returns ErrEndOfData if all elements are produced.
-func (sp *SliceSource[T]) Pull(_ BlockingType) (*T, error) {
-	if len(sp.data) < 1 {
+// Pull emits the next element from the slice or returns io.EOF if all elements are produced.
+func (sp *SliceSource[T]) Pull(ctx context.Context) (*T, error) {
+	if (ctx.Err() != nil) || (len(sp.data) < 1) {
 		sp.Close() // Free unused slice
 
-		return nil, ErrEndOfData
+		return nil, io.EOF
 	}
 
 	value := sp.data[0]
@@ -172,16 +153,28 @@ func NewSliceSink[T any](dest *[]T) *SliceSink[T] {
 //
 // Notes:
 // - The method processes all available elements in the source.
-// - It stops when the source is exhausted, returning `ErrEndOfData`.
-func (ss *SliceSink[T]) Append(input Source[T]) (*[]T, error) {
+// - It stops when the source is exhausted, returning `io.EOF`.
+func (ss *SliceSink[T]) Append(ctx context.Context, input Source[T]) (*[]T, error) {
+	ctxErr := ctx.Err()
+
 	for {
-		next, err := input.Pull(Blocking)
-		if err != nil {
+		var next *T
+
+		var err error
+
+		if ctxErr == nil {
+			next, err = input.Pull(ctx)
+			ctxErr = ctx.Err()
+		}
+
+		if (err != nil) || (ctxErr != nil) {
 			switch {
-			case errors.Is(err, ErrEndOfData):
+			case errors.Is(err, io.EOF):
 				return ss.dest, nil
-			case errors.Is(err, ErrNoDataYet):
-				return nil, fmt.Errorf("unexpected sentinel error: %w", err)
+			case ctxErr != nil:
+				input.Close()
+
+				return nil, fmt.Errorf("operation canceled: %w", ctxErr)
 			default:
 				return nil, fmt.Errorf("data pull failed: %w", err)
 			}
@@ -203,25 +196,27 @@ func NewMapper[TIn, TOut any](input Source[TIn], mapFn func(TIn) TOut) *Mapper[T
 }
 
 // Pull transforms the next input element using the mapping function.
-func (mt *Mapper[TIn, TOut]) Pull(block BlockingType) (*TOut, error) {
+func (mt *Mapper[TIn, TOut]) Pull(ctx context.Context) (*TOut, error) {
 	var nextIn *TIn
 
-	err := ErrEndOfData
+	err := io.EOF
+	ctxErr := ctx.Err()
 
-	if mt.input != nil {
-		nextIn, err = mt.input.Pull(block)
+	if (ctxErr == nil) && (mt.input != nil) {
+		nextIn, err = mt.input.Pull(ctx)
+		ctxErr = ctx.Err()
 	}
 
-	if err != nil {
+	if (err != nil) || (ctxErr != nil) {
 		switch {
-		case errors.Is(err, ErrEndOfData):
+		case errors.Is(err, io.EOF):
 			mt.Close()
 
-			return nil, ErrEndOfData
-		case (block == NonBlocking) && errors.Is(err, ErrNoDataYet):
-			return nil, ErrNoDataYet
-		case errors.Is(err, ErrNoDataYet):
-			return nil, fmt.Errorf("unexpected sentinel error: %w", err)
+			return nil, io.EOF
+		case ctxErr != nil:
+			mt.Close()
+
+			return nil, fmt.Errorf("operation canceled: %w", ctxErr)
 		default:
 			return nil, fmt.Errorf("data pull failed: %w", err)
 		}
@@ -254,26 +249,28 @@ func NewFilter[T any](input Source[T], predicate func(T) bool) *Filter[T] {
 }
 
 // Pull emits the next element that satisfies the predicate.
-func (ft *Filter[T]) Pull(block BlockingType) (*T, error) {
+func (ft *Filter[T]) Pull(ctx context.Context) (*T, error) {
 	for {
 		var next *T
 
-		err := ErrEndOfData
+		err := io.EOF
+		ctxErr := ctx.Err()
 
-		if ft.input != nil {
-			next, err = ft.input.Pull(block)
+		if (ctxErr == nil) && (ft.input != nil) {
+			next, err = ft.input.Pull(ctx)
+			ctxErr = ctx.Err()
 		}
 
-		if err != nil {
+		if (ctxErr != nil) || (err != nil) {
 			switch {
-			case errors.Is(err, ErrEndOfData):
+			case errors.Is(err, io.EOF):
 				ft.Close()
 
-				return nil, ErrEndOfData
-			case (block == NonBlocking) && errors.Is(err, ErrNoDataYet):
-				return nil, ErrNoDataYet
-			case errors.Is(err, ErrNoDataYet):
-				return nil, fmt.Errorf("unexpected sentinel error: %w", err)
+				return nil, io.EOF
+			case ctxErr != nil:
+				ft.Close()
+
+				return nil, fmt.Errorf("operation canceled: %w", ctxErr)
 			default:
 				return nil, fmt.Errorf("data pull failed: %w", err)
 			}
@@ -310,25 +307,27 @@ func NewTaker[T any](input Source[T], elCount int) *Taker[T] {
 }
 
 // Pull emits the next element that satisfies the predicate.
-func (tt *Taker[T]) Pull(block BlockingType) (*T, error) {
+func (tt *Taker[T]) Pull(ctx context.Context) (*T, error) {
 	var next *T
 
-	err := ErrEndOfData
+	err := io.EOF
+	ctxErr := ctx.Err()
 
-	if tt.input != nil {
-		next, err = tt.input.Pull(block)
+	if (ctxErr == nil) && (tt.input != nil) {
+		next, err = tt.input.Pull(ctx)
+		ctxErr = ctx.Err()
 	}
 
-	if err != nil {
+	if (ctxErr != nil) || (err != nil) {
 		switch {
-		case errors.Is(err, ErrEndOfData):
+		case errors.Is(err, io.EOF):
 			tt.Close()
 
-			return nil, ErrEndOfData
-		case (block == NonBlocking) && errors.Is(err, ErrNoDataYet):
-			return nil, ErrNoDataYet
-		case errors.Is(err, ErrNoDataYet):
-			return nil, fmt.Errorf("unexpected sentinel error: %w", err)
+			return nil, io.EOF
+		case ctxErr != nil:
+			tt.Close()
+
+			return nil, fmt.Errorf("operation canceled: %w", ctxErr)
 		default:
 			return nil, fmt.Errorf("data pull failed: %w", err)
 		}
@@ -337,7 +336,7 @@ func (tt *Taker[T]) Pull(block BlockingType) (*T, error) {
 	if tt.left <= 0 {
 		tt.Close()
 
-		return nil, ErrEndOfData
+		return nil, io.EOF
 	}
 
 	tt.left--
@@ -392,9 +391,11 @@ func NewReduceTransformer[TIn, TOut any](
 	}
 }
 
-// Pull generates the next finalized element from the reduction or returns ErrEndOfData when complete.
-func (rt *ReduceTransformer[TIn, TOut]) Pull(block BlockingType) (*TOut, error) {
-	if len(rt.buffer) > 0 {
+// Pull generates the next finalized element from the reduction or returns io.EOF when complete.
+func (rt *ReduceTransformer[TIn, TOut]) Pull(ctx context.Context) (*TOut, error) {
+	ctxErr := ctx.Err()
+
+	if (ctxErr == nil) && (len(rt.buffer) > 0) {
 		out := rt.buffer[0]
 		rt.buffer = rt.buffer[1:]
 
@@ -404,22 +405,30 @@ func (rt *ReduceTransformer[TIn, TOut]) Pull(block BlockingType) (*TOut, error) 
 	if rt.input == nil {
 		rt.Close()
 
-		return nil, ErrEndOfData
+		return nil, io.EOF
 	}
 
-	next, err := rt.input.Pull(block)
-	if err != nil {
+	var next *TIn
+
+	var err error
+
+	if ctxErr == nil {
+		next, err = rt.input.Pull(ctx)
+		ctxErr = ctx.Err()
+	}
+
+	if (ctxErr != nil) || (err != nil) {
 		switch {
-		case errors.Is(err, ErrEndOfData):
+		case errors.Is(err, io.EOF):
 			rt.closeInput()
 			rt.buffer = rt.accumulator
 			rt.accumulator = nil
 
-			return rt.Pull(block)
-		case (block == NonBlocking) && errors.Is(err, ErrNoDataYet):
-			return nil, ErrNoDataYet
-		case errors.Is(err, ErrNoDataYet):
-			return nil, fmt.Errorf("unexpected sentinel error: %w", err)
+			return rt.Pull(ctx)
+		case ctxErr != nil:
+			rt.Close()
+
+			return nil, fmt.Errorf("operation canceled: %w", ctxErr)
 		default:
 			return nil, fmt.Errorf("data pull failed: %w", err)
 		}
@@ -427,7 +436,7 @@ func (rt *ReduceTransformer[TIn, TOut]) Pull(block BlockingType) (*TOut, error) 
 
 	rt.buffer, rt.accumulator = rt.reducer(rt.accumulator, *next)
 
-	return rt.Pull(block)
+	return rt.Pull(ctx)
 }
 
 // closeInput tells the source no more data will be Pull()ed but retains
@@ -466,17 +475,28 @@ func NewReducer[TIn, TOut any](
 }
 
 // Reduce processes all elements from the input producer and returns the final reduced value.
-func (rc *Reducer[TIn, TOut]) Reduce(input Source[TIn]) (TOut, error) {
+func (rc *Reducer[TIn, TOut]) Reduce(ctx context.Context, input Source[TIn]) (TOut, error) {
 	acc := rc.initialAcc
 
 	for {
-		next, err := input.Pull(Blocking)
-		if err != nil {
+		var next *TIn
+
+		err := io.EOF
+
+		ctxErr := ctx.Err()
+		if ctxErr == nil {
+			next, err = input.Pull(ctx)
+			ctxErr = ctx.Err()
+		}
+
+		if (ctxErr != nil) || (err != nil) {
 			switch {
-			case errors.Is(err, ErrEndOfData):
+			case errors.Is(err, io.EOF):
 				return acc, nil
-			case errors.Is(err, ErrNoDataYet):
-				return *new(TOut), fmt.Errorf("unexpected sentinel error: %w", err)
+			case ctxErr != nil:
+				input.Close()
+
+				return *new(TOut), fmt.Errorf("operation canceled: %w", ctxErr)
 			default:
 				return *new(TOut), fmt.Errorf("data pull failed: %w", err)
 			}

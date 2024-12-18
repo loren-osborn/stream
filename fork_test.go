@@ -1,6 +1,8 @@
 package stream_test
 
 import (
+	"context"
+	"io"
 	"testing"
 
 	//nolint:depguard // package under test.
@@ -30,28 +32,30 @@ func assertPointedToVal[T comparable](t *testing.T, want *T, got *T) {
 
 // MockSourceCall defines the expected behavior for a single call to the mock source.
 type MockSourceCall[T any] struct {
-	ExpectedBlock stream.BlockingType // Expected BlockingType for this call
-	RetVal        *T                  // Value to return (nil if no value)
-	RetErr        error               // Error to return
+	ctxGen func() context.Context // Expected Context for this call
+	RetVal *T                     // Value to return (nil if no value)
+	RetErr error                  // Error to return
 }
 
 // mockSource creates a mock Source that validates calls against a sequence of expected behaviors.
 func mockSource[T any](t *testing.T, expectedCall **MockSourceCall[T]) stream.Source[T] {
 	t.Helper()
 
-	return stream.SourceFunc[T](func(block stream.BlockingType) (*T, error) {
+	return stream.SourceFunc[T](func(ctx context.Context) (*T, error) {
 		if *expectedCall == nil {
 			t.Errorf("unexpected call to mockSource when expectedCall nil")
 
-			return nil, stream.ErrEndOfData
+			return nil, io.EOF
 		}
 
 		expected := **expectedCall
 		*expectedCall = nil
 
-		// Validate block type
-		if block != expected.ExpectedBlock {
-			t.Errorf("expected block %v, got %v", expected.ExpectedBlock, block)
+		expectedCtx := expected.ctxGen()
+
+		// Validate context
+		if ctx != expectedCtx {
+			t.Errorf("expected context %v, got %v", expectedCtx, ctx)
 		}
 
 		// Return the configured value and error
@@ -60,11 +64,11 @@ func mockSource[T any](t *testing.T, expectedCall **MockSourceCall[T]) stream.So
 }
 
 type PullCallType[T any] struct {
-	PreStuffCalls  [][]T               // Values to Stuff() before this Pull()
-	BlockingType   stream.BlockingType // BlockingType passed to Pull()
-	ExpectedCalls  *MockSourceCall[T]  // Expected behavior for proxied Pull() call
-	ExpectedRetVal *T                  // Expected return value of Pull() call
-	ExpectedRetErr error               // Expected returned error of Pull() call
+	PreStuffCalls  [][]T                  // Values to Stuff() before this Pull()
+	ctxGen         func() context.Context // Context passed to Pull()
+	ExpectedCalls  *MockSourceCall[T]     // Expected behavior for proxied Pull() call
+	ExpectedRetVal *T                     // Expected return value of Pull() call
+	ExpectedRetErr error                  // Expected returned error of Pull() call
 }
 
 type SpoolerTestCase[T any] struct {
@@ -80,24 +84,24 @@ func getTestCasesSpoolerNormalOps() []SpoolerTestCase[int] {
 			PullCalls: []PullCallType[int]{
 				{
 					PreStuffCalls:  [][]int{},
-					BlockingType:   stream.Blocking,
-					ExpectedCalls:  &MockSourceCall[int]{ExpectedBlock: stream.Blocking, RetVal: ptr(1), RetErr: nil},
+					ctxGen:         context.Background,
+					ExpectedCalls:  &MockSourceCall[int]{ctxGen: context.Background, RetVal: ptr(1), RetErr: nil},
 					ExpectedRetVal: ptr(1),
 					ExpectedRetErr: nil,
 				},
 				{
 					PreStuffCalls:  [][]int{},
-					BlockingType:   stream.Blocking,
-					ExpectedCalls:  &MockSourceCall[int]{ExpectedBlock: stream.Blocking, RetVal: ptr(2), RetErr: nil},
+					ctxGen:         context.Background,
+					ExpectedCalls:  &MockSourceCall[int]{ctxGen: context.Background, RetVal: ptr(2), RetErr: nil},
 					ExpectedRetVal: ptr(2),
 					ExpectedRetErr: nil,
 				},
 				{
 					PreStuffCalls:  [][]int{},
-					BlockingType:   stream.Blocking,
-					ExpectedCalls:  &MockSourceCall[int]{ExpectedBlock: stream.Blocking, RetVal: nil, RetErr: stream.ErrEndOfData},
+					ctxGen:         context.Background,
+					ExpectedCalls:  &MockSourceCall[int]{ctxGen: context.Background, RetVal: nil, RetErr: io.EOF},
 					ExpectedRetVal: nil,
-					ExpectedRetErr: stream.ErrEndOfData,
+					ExpectedRetErr: io.EOF,
 				},
 			},
 		},
@@ -106,24 +110,24 @@ func getTestCasesSpoolerNormalOps() []SpoolerTestCase[int] {
 			PullCalls: []PullCallType[int]{
 				{
 					PreStuffCalls:  [][]int{{1}, {2}},
-					BlockingType:   stream.Blocking,
+					ctxGen:         context.Background,
 					ExpectedCalls:  nil,
 					ExpectedRetVal: ptr(1),
 					ExpectedRetErr: nil,
 				},
 				{
 					PreStuffCalls:  [][]int{},
-					BlockingType:   stream.Blocking,
+					ctxGen:         context.Background,
 					ExpectedCalls:  nil,
 					ExpectedRetVal: ptr(2),
 					ExpectedRetErr: nil,
 				},
 				{
 					PreStuffCalls:  [][]int{},
-					BlockingType:   stream.Blocking,
-					ExpectedCalls:  &MockSourceCall[int]{ExpectedBlock: stream.Blocking, RetVal: nil, RetErr: stream.ErrEndOfData},
+					ctxGen:         context.Background,
+					ExpectedCalls:  &MockSourceCall[int]{ctxGen: context.Background, RetVal: nil, RetErr: io.EOF},
 					ExpectedRetVal: nil,
-					ExpectedRetErr: stream.ErrEndOfData,
+					ExpectedRetErr: io.EOF,
 				},
 			},
 		},
@@ -132,17 +136,17 @@ func getTestCasesSpoolerNormalOps() []SpoolerTestCase[int] {
 			PullCalls: []PullCallType[int]{
 				{
 					PreStuffCalls:  [][]int{},
-					BlockingType:   stream.Blocking,
-					ExpectedCalls:  &MockSourceCall[int]{ExpectedBlock: stream.Blocking, RetVal: nil, RetErr: stream.ErrEndOfData},
+					ctxGen:         context.Background,
+					ExpectedCalls:  &MockSourceCall[int]{ctxGen: context.Background, RetVal: nil, RetErr: io.EOF},
 					ExpectedRetVal: nil,
-					ExpectedRetErr: stream.ErrEndOfData,
+					ExpectedRetErr: io.EOF,
 				},
 				{
 					PreStuffCalls:  [][]int{},
-					BlockingType:   stream.Blocking,
+					ctxGen:         context.Background,
 					ExpectedCalls:  nil,
 					ExpectedRetVal: nil,
-					ExpectedRetErr: stream.ErrEndOfData,
+					ExpectedRetErr: io.EOF,
 				},
 			},
 		},
@@ -174,11 +178,13 @@ func runSpoolerTests[T comparable](t *testing.T, testCases []SpoolerTestCase[T])
 					spooler.Stuff(stuffValues)
 				}
 
+				ctx := pullCall.ctxGen()
+
 				// Set the expected proxied Pull() call
 				currentCall = pullCall.ExpectedCalls
 
 				// Perform Pull()
-				value, err := spooler.Pull(pullCall.BlockingType)
+				value, err := spooler.Pull(ctx)
 
 				// Validate proxied Pull() behavior
 				if currentCall != nil {

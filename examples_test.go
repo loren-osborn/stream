@@ -2,6 +2,7 @@
 package stream
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"strings"
@@ -19,7 +20,7 @@ func ExampleNewFilter() {
 	toStrMapper := NewMapper(filter, strconv.Itoa)                          // Convert to string
 	sink := NewSliceSink(&result)
 
-	outResult, err := sink.Append(toStrMapper)
+	outResult, err := sink.Append(context.Background(), toStrMapper)
 	if err != nil {
 		return // Fail
 	}
@@ -32,6 +33,6 @@ func ExampleNewReducer() {
 	data := []int{1, 2, 3, 4, 5}
 	source := NewSliceSource(data)
 	reducer := NewReducer(0, func(acc, next int) int { return acc + next })
-	result, _ := reducer.Reduce(source)
+	result, _ := reducer.Reduce(context.Background(), source)
 	fmt.Println(result) // Output: 15
 }

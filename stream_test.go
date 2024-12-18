@@ -1,21 +1,16 @@
 package stream_test
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"io"
 	"reflect"
 	"testing"
 
 	//nolint:depguard // package under test.
 	"github.com/loren-osborn/stream"
 )
-
-const (
-	DataPullErrorSrcErrStr = "data pull failed: source error"
-)
-
-// ErrTestSourceError is a synthetic source error used for testing.
-var ErrTestSourceError = errors.New("source error")
 
 // ErrTestOriginalError is a synthetic original error used for testing.
 var ErrTestOriginalError = errors.New("original error")
@@ -28,7 +23,7 @@ func TestSliceSource(t *testing.T) {
 	source := stream.NewSliceSource(data)
 
 	for _, expected := range data {
-		value, err := source.Pull(stream.Blocking)
+		value, err := source.Pull(context.Background())
 		assertError(t, err, nil)
 
 		if value == nil {
@@ -38,8 +33,8 @@ func TestSliceSource(t *testing.T) {
 		}
 	}
 
-	value, err := source.Pull(stream.Blocking)
-	assertError(t, err, stream.ErrEndOfData)
+	value, err := source.Pull(context.Background())
+	assertError(t, err, io.EOF)
 
 	if value != nil {
 		t.Errorf("expected nil, got %v", value)
@@ -56,7 +51,7 @@ func TestMapper(t *testing.T) {
 
 	expected := []int{2, 4, 6, 8, 10}
 	for _, exp := range expected {
-		value, err := mapper.Pull(stream.Blocking)
+		value, err := mapper.Pull(context.Background())
 		assertError(t, err, nil)
 
 		if value == nil {
@@ -66,8 +61,8 @@ func TestMapper(t *testing.T) {
 		}
 	}
 
-	value, err := mapper.Pull(stream.Blocking)
-	assertError(t, err, stream.ErrEndOfData)
+	value, err := mapper.Pull(context.Background())
+	assertError(t, err, io.EOF)
 
 	if value != nil {
 		t.Errorf("expected nil, got %v", value)
@@ -84,7 +79,7 @@ func TestFilter(t *testing.T) {
 
 	expected := []int{2, 4}
 	for _, exp := range expected {
-		value, err := filter.Pull(stream.Blocking)
+		value, err := filter.Pull(context.Background())
 		assertError(t, err, nil)
 
 		if value == nil {
@@ -94,8 +89,8 @@ func TestFilter(t *testing.T) {
 		}
 	}
 
-	value, err := filter.Pull(stream.Blocking)
-	assertError(t, err, stream.ErrEndOfData)
+	value, err := filter.Pull(context.Background())
+	assertError(t, err, io.EOF)
 
 	if value != nil {
 		t.Errorf("expected nil, got %v", value)
@@ -110,7 +105,7 @@ func TestReducer(t *testing.T) {
 	source := stream.NewSliceSource(data)
 	consumer := stream.NewReducer(0, func(acc, next int) int { return acc + next })
 
-	result, err := consumer.Reduce(source)
+	result, err := consumer.Reduce(context.Background(), source)
 	assertError(t, err, nil)
 
 	if result != 15 { // Sum of 1 to 5
@@ -145,7 +140,7 @@ func TestReduceTransformer(t *testing.T) {
 
 	expected := []int{6, 9}
 	for _, exp := range expected {
-		value, err := transformer.Pull(stream.Blocking)
+		value, err := transformer.Pull(context.Background())
 		assertError(t, err, nil)
 
 		if value == nil {
@@ -155,8 +150,8 @@ func TestReduceTransformer(t *testing.T) {
 		}
 	}
 
-	value, err := transformer.Pull(stream.Blocking)
-	assertError(t, err, stream.ErrEndOfData)
+	value, err := transformer.Pull(context.Background())
+	assertError(t, err, io.EOF)
 
 	if value != nil {
 		t.Errorf("expected nil, got %v", value)
@@ -172,14 +167,9 @@ type sinkErrorTestCase struct {
 func getSinkErrorTestCases() []sinkErrorTestCase {
 	return []sinkErrorTestCase{
 		{
-			name:          "EndOfData",
-			sourceError:   stream.ErrEndOfData,
+			name:          "EOF",
+			sourceError:   io.EOF,
 			expectedError: nil,
-		},
-		{
-			name:          "ErrNoDataYet not expected when blocking",
-			sourceError:   stream.ErrNoDataYet,
-			expectedError: fmt.Errorf("unexpected sentinel error: %w", stream.ErrNoDataYet),
 		},
 		{
 			name:          "ErrorHandling",
@@ -191,23 +181,23 @@ func getSinkErrorTestCases() []sinkErrorTestCase {
 
 type sinkOutputTestCase[T any] struct {
 	name      string
-	generator func(stream.Source[T]) (any, error) // returning any, because we only care about nil-ness
+	generator func(context.Context, stream.Source[T]) (any, error) // returning any, because we only care about nil-ness
 }
 
 func getSinkOutputTestCase() []sinkOutputTestCase[int] {
 	return []sinkOutputTestCase[int]{
 		{
 			name: "SliceSink",
-			generator: func(src stream.Source[int]) (any, error) {
+			generator: func(ctx context.Context, src stream.Source[int]) (any, error) {
 				dummyDest := []int{}
 				sink := stream.NewSliceSink(&dummyDest)
 
-				return sink.Append(src)
+				return sink.Append(ctx, src)
 			},
 		},
 		{
 			name: "Reducer",
-			generator: func(src stream.Source[int]) (any, error) {
+			generator: func(ctx context.Context, src stream.Source[int]) (any, error) {
 				reducer := stream.NewReducer(
 					nil,
 					func(acc []int, next int) []int {
@@ -219,7 +209,7 @@ func getSinkOutputTestCase() []sinkOutputTestCase[int] {
 					},
 				)
 
-				return reducer.Reduce(src)
+				return reducer.Reduce(ctx, src)
 			},
 		},
 	}
@@ -234,15 +224,17 @@ func TestSinkErrorHandling(t *testing.T) {
 		t.Run(fmt.Sprintf("%s %s", testCase.Second.name, testCase.First.name), func(t *testing.T) {
 			t.Parallel()
 
-			source := stream.SourceFunc[int](func(block stream.BlockingType) (*int, error) {
-				if block != stream.Blocking {
-					t.Errorf("expected Pull(Blocking), got Pull(NonBlocking)")
+			outerCtx := context.Background()
+
+			source := stream.SourceFunc[int](func(ctx context.Context) (*int, error) {
+				if outerCtx != ctx {
+					t.Errorf("Pulled contexts didn't match. Outer: %v, Inner: %v", outerCtx, ctx)
 				}
 
 				return nil, testCase.First.sourceError
 			}, nil)
 
-			val, err := testCase.Second.generator(source)
+			val, err := testCase.Second.generator(outerCtx, source)
 
 			if testCase.First.expectedError != nil && !(reflect.ValueOf(val).IsNil()) {
 				if err == nil {
@@ -259,7 +251,7 @@ func TestSinkErrorHandling(t *testing.T) {
 
 type transformErrorTestCase struct {
 	name          string
-	block         stream.BlockingType
+	ctxGen        func() context.Context
 	sourceError   error
 	expectedError error
 }
@@ -267,38 +259,14 @@ type transformErrorTestCase struct {
 func getTransformErrorTestCases() []transformErrorTestCase {
 	return []transformErrorTestCase{
 		{
-			name:          "EndOfData blocking",
-			block:         stream.Blocking,
-			sourceError:   stream.ErrEndOfData,
-			expectedError: stream.ErrEndOfData,
-		},
-		{
-			name:          "EndOfData non-blocking",
-			block:         stream.NonBlocking,
-			sourceError:   stream.ErrEndOfData,
-			expectedError: stream.ErrEndOfData,
-		},
-		{
-			name:          "ErrNoDataYet not expected when blocking",
-			block:         stream.Blocking,
-			sourceError:   stream.ErrNoDataYet,
-			expectedError: fmt.Errorf("unexpected sentinel error: %w", stream.ErrNoDataYet),
-		},
-		{
-			name:          "ErrNoDataYet non-blocking",
-			block:         stream.NonBlocking,
-			sourceError:   stream.ErrNoDataYet,
-			expectedError: stream.ErrNoDataYet,
+			name:          "EOF blocking",
+			ctxGen:        context.Background,
+			sourceError:   io.EOF,
+			expectedError: io.EOF,
 		},
 		{
 			name:          "ErrorHandling blocking",
-			block:         stream.Blocking,
-			sourceError:   ErrTestOriginalError,
-			expectedError: fmt.Errorf("data pull failed: %w", ErrTestOriginalError),
-		},
-		{
-			name:          "ErrorHandling non-blocking",
-			block:         stream.NonBlocking,
+			ctxGen:        context.Background,
 			sourceError:   ErrTestOriginalError,
 			expectedError: fmt.Errorf("data pull failed: %w", ErrTestOriginalError),
 		},
@@ -307,61 +275,61 @@ func getTransformErrorTestCases() []transformErrorTestCase {
 
 type transformerOutputTestCase[T any] struct {
 	name      string
-	generator func(stream.Source[T], stream.BlockingType) func() (*T, error)
+	generator func(stream.Source[T], context.Context) func() (*T, error)
 }
 
 func getTransformerIntOutputTestCase() []transformerOutputTestCase[int] {
 	return []transformerOutputTestCase[int]{
 		{
 			name: "Mapper",
-			generator: func(src stream.Source[int], blk stream.BlockingType) func() (*int, error) {
+			generator: func(src stream.Source[int], ctx context.Context) func() (*int, error) {
 				mapper := stream.NewMapper(src, func(n int) int { return n * 2 })
 
 				return func() (*int, error) {
-					return mapper.Pull(blk)
+					return mapper.Pull(ctx)
 				}
 			},
 		},
 		{
 			name: "Filter",
-			generator: func(src stream.Source[int], blk stream.BlockingType) func() (*int, error) {
+			generator: func(src stream.Source[int], ctx context.Context) func() (*int, error) {
 				filter := stream.NewFilter(src, func(n int) bool { return n%2 == 0 })
 
 				return func() (*int, error) {
-					return filter.Pull(blk)
+					return filter.Pull(ctx)
 				}
 			},
 		},
 		{
 			name: "Taker",
-			generator: func(src stream.Source[int], blk stream.BlockingType) func() (*int, error) {
+			generator: func(src stream.Source[int], ctx context.Context) func() (*int, error) {
 				taker := stream.NewTaker(src, 3)
 
 				return func() (*int, error) {
-					return taker.Pull(blk)
+					return taker.Pull(ctx)
 				}
 			},
 		},
 		{
 			name: "ReduceTransformer",
-			generator: func(src stream.Source[int], blk stream.BlockingType) func() (*int, error) {
+			generator: func(src stream.Source[int], ctx context.Context) func() (*int, error) {
 				reducer := func(acc []int, next int) ([]int, []int) {
 					return append(acc, next), nil
 				}
 				transformer := stream.NewReduceTransformer(src, reducer)
 
 				return func() (*int, error) {
-					return transformer.Pull(blk)
+					return transformer.Pull(ctx)
 				}
 			},
 		},
 		{
 			name: "Spooler",
-			generator: func(src stream.Source[int], blk stream.BlockingType) func() (*int, error) {
+			generator: func(src stream.Source[int], ctx context.Context) func() (*int, error) {
 				spooler := stream.NewSpooler(src)
 
 				return func() (*int, error) {
-					return spooler.Pull(blk)
+					return spooler.Pull(ctx)
 				}
 			},
 		},
@@ -380,15 +348,17 @@ func TestTransformerErrorHandling(t *testing.T) {
 				t.Errorf("BAD TEST: Should expect an error")
 			}
 
-			source := stream.SourceFunc[int](func(block stream.BlockingType) (*int, error) {
-				if block != testCase.First.block {
-					t.Errorf("expected Pull(%v), got Pull(%v)", testCase.First.block, block)
+			outerCtx := testCase.First.ctxGen()
+
+			source := stream.SourceFunc[int](func(ctx context.Context) (*int, error) {
+				if outerCtx != ctx {
+					t.Errorf("Pulled contexts didn't match. Outer: %v, Inner: %v", outerCtx, ctx)
 				}
 
 				return nil, testCase.First.sourceError
 			}, nil)
 
-			puller := testCase.Second.generator(source, testCase.First.block)
+			puller := testCase.Second.generator(source, outerCtx)
 
 			val, err := puller()
 
@@ -415,7 +385,7 @@ func TestNewDropperBasic(t *testing.T) {
 
 	expected := []int{4, 5, 6, 7}
 	for _, exp := range expected {
-		value, err := dropper.Pull(stream.Blocking)
+		value, err := dropper.Pull(context.Background())
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -427,9 +397,9 @@ func TestNewDropperBasic(t *testing.T) {
 		}
 	}
 
-	value, err := dropper.Pull(stream.Blocking)
-	if !errors.Is(err, stream.ErrEndOfData) {
-		t.Fatalf("expected ErrEndOfData, got %v", err)
+	value, err := dropper.Pull(context.Background())
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("expected EOF, got %v", err)
 	}
 
 	if value != nil {
@@ -498,6 +468,6 @@ func ExampleReducer() {
 	filter := stream.NewFilter(mapper, func(n int) bool { return n%2 == 0 }) // Keep even squares
 	consumer := stream.NewReducer(0, func(acc, next int) int { return acc + next })
 
-	result, _ := consumer.Reduce(filter)
+	result, _ := consumer.Reduce(context.Background(), filter)
 	fmt.Println(result) // Output: 20
 }

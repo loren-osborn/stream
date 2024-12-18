@@ -4,8 +4,10 @@ package stream
 // This file implements fork and related features like spool and partition.
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"io"
 	"slices"
 )
 
@@ -29,39 +31,48 @@ type Spooler[T any] struct {
 // Returns:
 // - A pointer to the next element (if available).
 // - An error, which can include:
-//   - ErrEndOfData: No more data is available from the source.
+//   - io.EOF: No more data is available from the source.
 //   - ErrNoDataYet: No data is available yet, but the source may provide more later
 //     (only if block is NonBlocking).
 //   - Other errors related to the source data retrieval.
 //
 // Notes:
-//   - If the source is exhausted (returns ErrEndOfData), the Spooler will close
+//   - If the source is exhausted (returns io.EOF), the Spooler will close
 //     the source and retain any buffered elements for further consumption.
-func (s *Spooler[T]) Pull(block BlockingType) (*T, error) {
-	if len(s.buffer) > 0 {
-		out := s.buffer[0]
-		s.buffer = s.buffer[1:]
+func (s *Spooler[T]) Pull(ctx context.Context) (*T, error) {
+	var next *T
 
-		return &out, nil
-	}
+	err := io.EOF
+	ctxErr := ctx.Err()
 
-	if s.input == nil {
-		s.Close()
+	if ctxErr == nil {
+		if len(s.buffer) > 0 {
+			out := s.buffer[0]
+			s.buffer = s.buffer[1:]
 
-		return nil, ErrEndOfData
-	}
+			return &out, nil
+		}
 
-	next, err := s.input.Pull(block)
-	if err != nil {
-		switch {
-		case errors.Is(err, ErrEndOfData):
+		if s.input == nil {
 			s.Close()
 
-			return nil, ErrEndOfData
-		case (block == NonBlocking) && errors.Is(err, ErrNoDataYet):
-			return nil, ErrNoDataYet
-		case errors.Is(err, ErrNoDataYet):
-			return nil, fmt.Errorf("unexpected sentinel error: %w", err)
+			return nil, io.EOF
+		}
+
+		next, err = s.input.Pull(ctx)
+		ctxErr = ctx.Err()
+	}
+
+	if (ctxErr != nil) || (err != nil) {
+		switch {
+		case ctxErr != nil:
+			s.input.Close()
+
+			return nil, fmt.Errorf("operation canceled: %w", ctxErr)
+		case errors.Is(err, io.EOF):
+			s.Close()
+
+			return nil, io.EOF
 		default:
 			return nil, fmt.Errorf("data pull failed: %w", err)
 		}
