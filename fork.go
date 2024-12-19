@@ -11,34 +11,40 @@ import (
 	"slices"
 )
 
-// Spooler provides buffering for elements that arrive early from a data source.
-// It allows buffering (via Stuff) and consumption (via Pull) of elements sequentially.
+// Spooler buffers elements arriving early from a data source and provides
+// sequential access to these elements. It supports buffering via Stuff and
+// consumption via Pull.
+//
+// Spooler ensures elements are retrieved in the same order they were buffered
+// or produced by the source. It can handle cases where elements are added to
+// the buffer manually or arrive from an upstream source.
 //
 // Type Parameter:
-// - T: The type of elements buffered and consumed.
+//
+//	T: The type of elements buffered and consumed by the Spooler.
 type Spooler[T any] struct {
 	input  Source[T]
 	buffer []T
 }
 
 // Pull retrieves the next item from the Spooler.
-// If buffered elements exist, the next buffered item is returned. Otherwise,
-// it pulls data from the source.
+//
+// If there are buffered elements, Pull returns the next buffered element.
+// Otherwise, it retrieves data from the upstream source. If the source is
+// exhausted, Pull returns io.EOF.
 //
 // Parameters:
-// - block: Specifies whether the operation should block if no data is available.
+//
+//	ctx: The context used to manage cancellation or timeout of the operation.
 //
 // Returns:
-// - A pointer to the next element (if available).
-// - An error, which can include:
-//   - io.EOF: No more data is available from the source.
-//   - ErrNoDataYet: No data is available yet, but the source may provide more later
-//     (only if block is NonBlocking).
-//   - Other errors related to the source data retrieval.
+//
+//	*T: A pointer to the next element, or nil if no data is available.
+//	error: An error indicating the result of the operation.
 //
 // Notes:
-//   - If the source is exhausted (returns io.EOF), the Spooler will close
-//     the source and retain any buffered elements for further consumption.
+//   - If the source returns io.EOF, the Spooler retains any buffered elements
+//     for further consumption and closes the source.
 func (s *Spooler[T]) Pull(ctx context.Context) (*T, error) {
 	var next *T
 
@@ -84,11 +90,12 @@ func (s *Spooler[T]) Pull(ctx context.Context) (*T, error) {
 // Stuff appends elements to the Spooler’s internal buffer for later retrieval.
 //
 // Parameters:
-// - items: The elements to buffer.
+//
+//	items: A slice of elements to be added to the buffer.
 //
 // Notes:
-//   - If the buffer capacity is insufficient, it will be grown to accommodate
-//     the additional items, with extra capacity for future growth.
+//   - If the buffer capacity is insufficient, it is grown to accommodate the
+//     additional elements, with extra capacity allocated for future growth.
 func (s *Spooler[T]) Stuff(items []T) {
 	reqdCap := (len(s.buffer) + len(items))
 	if cap(s.buffer) < reqdCap {
@@ -99,11 +106,13 @@ func (s *Spooler[T]) Stuff(items []T) {
 	s.buffer = append(s.buffer, items...)
 }
 
-// closeInput signals to the source that no more data will be pulled.
-// The Spooler retains any buffered elements for future consumption.
+// closeInput signals to the upstream source that no more data will be pulled.
 //
 // Notes:
-// - This is an internal method and should not be called directly by external consumers.
+//   - This method does not clear the internal buffer, allowing further
+//     consumption of buffered elements.
+//   - It is intended for internal use and should not be called directly by
+//     external consumers.
 func (s *Spooler[T]) closeInput() {
 	if s.input != nil {
 		s.input.Close()
@@ -112,26 +121,26 @@ func (s *Spooler[T]) closeInput() {
 	s.input = nil
 }
 
-// Close closes the Spooler and releases its resources.
-// It signals to the source that no more data will be pulled and clears
-// the internal buffer.
+// Close signals to the Spooler that it will no longer be used and releases
+// its resources.
+//
+// This method clears the internal buffer and closes the upstream source.
 func (s *Spooler[T]) Close() {
 	s.closeInput()
 
 	s.buffer = nil
 }
 
-// NewSpooler creates and returns a new Spooler.
+// NewSpooler creates a new Spooler instance for buffering and sequentially
+// consuming elements from a data source.
 //
 // Parameters:
-// - input: The data source to be spooled.
+//
+//	input: The upstream source from which elements are consumed.
 //
 // Returns:
-// - A pointer to a new Spooler instance.
 //
-// Notes:
-//   - The input source may provide elements dynamically, which the Spooler
-//     buffers for sequential consumption.
+//	*Spooler[T]: A pointer to the newly created Spooler.
 func NewSpooler[T any](input Source[T]) *Spooler[T] {
 	return &Spooler[T]{input: input, buffer: nil}
 }

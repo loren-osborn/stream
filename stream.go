@@ -2,21 +2,39 @@
 //
 // # Overview
 //
-// This package defines abstractions for producing, consuming, and transforming data
-// streams in Go. Streams are modeled using interfaces and generics, enabling type-safe
-// and reusable pipelines for processing large datasets.
+// The stream package offers abstractions for handling streams of data, enabling
+// efficient, type-safe, and composable processing pipelines. The primary focus
+// of this package is on transforming and consuming streams of data, often used
+// in scenarios such as lazy evaluation, incremental data processing, and
+// functional programming-inspired workflows.
 //
-// # Core Components
+// # Core Concepts
 //
-// Source: A data source that emits elements one at a time.
+//   - Source[T]: An interface that represents a producer of data elements, emitting
+//     elements one at a time via the Pull method.
+//   - Sink: A conceptual construct representing the consumption of elements, often
+//     used to aggregate or process data from a Source.
+//   - Transformer: A conceptual construct combining the behavior of a Source and a Sink.
+//     Transformers take input from a Source, apply a transformation, and acts as
+//     a new Source for output.
+//
+// Note: While `Source[T]` is an actual Go interface defined in this package, the
+// Sink and Transformer are conceptual constructs and not explicitly defined as
+// interfaces or types in this package. They are described here to aid understanding
+// and avoid confusion when working with the components provided.
 //
 // # Common Implementations
 //
-// - SliceSource: Wraps a slice to act as a source.
-// - Map: Transforms elements of one type into another.
-// - Filter: Filters elements based on a predicate.
-// - Reduce: Reduces an entire source to a single value.
-// - ReduceTransformer: Incrementally reduces a source while emitting intermediate results.
+//   - SliceSource: Wraps a slice to act as a Source.
+//   - Mapper: Applies a transformation function to elements in a Source.
+//   - Filter: Filters elements in a Source based on a predicate.
+//   - Taker: Emits a limited number of elements from a Source.
+//   - ReduceTransformer: Incrementally reduces elements from a Source while emitting
+//     intermediate results.
+//
+// # Usage
+//
+// The stream package encourages building composable pipelines. For example:
 //
 // # Examples
 //
@@ -47,6 +65,9 @@
 // reducer := NewReducer(0, func(acc, next int) int { return acc + next })
 // result, _ := reducer.Reduce(source)
 // fmt.Println(result) // Output: 15
+//
+// The above example demonstrates the use of Sources, Transformers, and a Sink
+// to create and consume a stream of data.
 package stream
 
 import (
@@ -56,19 +77,24 @@ import (
 	"io"
 )
 
-// Source represents a source of data that can pull elements one at a time.
+// Source represents a source of data that emits elements one at a time.
+//
+// Pull retrieves the next element, or an error if none is available. Implementations
+// should return io.EOF when the source is exhausted. Close releases any resources held by
+// the source.
 type Source[T any] interface {
 	Pull(ctx context.Context) (*T, error) // Returns the next element.
 	Close()                               // Lets the consumer tell the source that no more data will be Pull()ed.
 }
 
-// sourceFunc is simple way to turn a lambda into a Source.
+// sourceFunc is a Source implementation backed by function calls.
 type sourceFunc[T any] struct {
 	srcFunc   func(context.Context) (*T, error)
 	closeFunc func()
 }
 
-// Pull proxies the call to the source lambda.
+// Pull calls the underlying source function to retrieve the next element.
+// It returns an error if the context is canceled or the source is exhausted.
 func (sf *sourceFunc[T]) Pull(ctx context.Context) (*T, error) {
 	var val *T
 
@@ -99,7 +125,7 @@ func (sf *sourceFunc[T]) Pull(ctx context.Context) (*T, error) {
 	return val, nil
 }
 
-// Close tells the source no more data will be Pull()ed.
+// Close releases the resources associated with the source function.
 func (sf *sourceFunc[T]) Close() {
 	if sf.closeFunc != nil {
 		sf.closeFunc()
@@ -109,7 +135,10 @@ func (sf *sourceFunc[T]) Close() {
 	sf.closeFunc = nil
 }
 
-// SourceFunc lets a lambda become a source.
+// SourceFunc creates a Source backed by function calls.
+//
+// srcFunc is called to produce elements, and closeFunc is called when
+// the source is closed.
 func SourceFunc[T any](srcFunc func(context.Context) (*T, error), closeFunc func()) Source[T] {
 	return &sourceFunc[T]{
 		srcFunc:   srcFunc,
@@ -117,17 +146,17 @@ func SourceFunc[T any](srcFunc func(context.Context) (*T, error), closeFunc func
 	}
 }
 
-// SliceSource is a producer backed by a slice of elements.
+// SliceSource is a Source implementation backed by a slice.
 type SliceSource[T any] struct {
 	data []T
 }
 
-// NewSliceSource creates a new SliceSource from a slice.
+// NewSliceSource returns a new SliceSource backed by the provided slice.
 func NewSliceSource[T any](data []T) *SliceSource[T] {
 	return &SliceSource[T]{data: data}
 }
 
-// Pull emits the next element from the slice or returns io.EOF if all elements are produced.
+// Pull retrieves the next element from the slice or io.EOF if exhausted.
 func (sp *SliceSource[T]) Pull(ctx context.Context) (*T, error) {
 	if (ctx.Err() != nil) || (len(sp.data) < 1) {
 		sp.Close() // Free unused slice
@@ -141,33 +170,24 @@ func (sp *SliceSource[T]) Pull(ctx context.Context) (*T, error) {
 	return &value, nil
 }
 
-// Close tells the source no more data will be Pull()ed.
+// Close releases the slice data.
 func (sp *SliceSource[T]) Close() {
 	sp.data = nil
 }
 
-// SliceSink is simple way to capture the result of a source into a slice.
+// SliceSink collects elements from a Source into a slice.
 type SliceSink[T any] struct {
 	dest *[]T
 }
 
-// NewSliceSink creates a new SliceSink from a slice pointer.
+// NewSliceSink creates a new SliceSink writing to the provided slice.
 func NewSliceSink[T any](dest *[]T) *SliceSink[T] {
 	return &SliceSink[T]{dest: dest}
 }
 
-// Append pulls all elements from the given source and appends them to the slice.
+// Append collects all elements from the source and appends them to the slice.
 //
-// Parameters:
-// - input: The source from which elements are pulled.
-//
-// Returns:
-// - A pointer to the resulting slice containing all pulled elements.
-// - An error if the operation encounters unexpected errors.
-//
-// Notes:
-// - The method processes all available elements in the source.
-// - It stops when the source is exhausted, returning `io.EOF`.
+// It stops on context cancellation, an error, or when the source is exhausted.
 func (ss *SliceSink[T]) Append(ctx context.Context, input Source[T]) (*[]T, error) {
 	ctxErr := ctx.Err()
 
@@ -200,18 +220,18 @@ func (ss *SliceSink[T]) Append(ctx context.Context, input Source[T]) (*[]T, erro
 	}
 }
 
-// Mapper applies a mapping function to a source, transforming TIn elements into TOut.
+// Mapper applies a transformation function to elements from a Source.
 type Mapper[TIn, TOut any] struct {
 	input Source[TIn]
 	mapFn func(TIn) TOut
 }
 
-// NewMapper creates a new Mapper.
+// NewMapper returns a new Mapper wrapping the given Source.
 func NewMapper[TIn, TOut any](input Source[TIn], mapFn func(TIn) TOut) *Mapper[TIn, TOut] {
 	return &Mapper[TIn, TOut]{input: input, mapFn: mapFn}
 }
 
-// Pull transforms the next input element using the mapping function.
+// Pull retrieves the next element from the input Source, applies the mapping function, and returns the.
 func (mt *Mapper[TIn, TOut]) Pull(ctx context.Context) (*TOut, error) {
 	var nextIn *TIn
 
@@ -243,7 +263,7 @@ func (mt *Mapper[TIn, TOut]) Pull(ctx context.Context) (*TOut, error) {
 	return &nextOut, nil
 }
 
-// Close tells the source no more data will be Pull()ed.
+// Close releases resources associated with the Mapper.
 func (mt *Mapper[TIn, TOut]) Close() {
 	if mt.input != nil {
 		mt.input.Close()
@@ -253,18 +273,18 @@ func (mt *Mapper[TIn, TOut]) Close() {
 	mt.mapFn = nil
 }
 
-// Filter filters elements in a source based on a predicate.
+// Filter selects elements from a Source based on a predicate function.
 type Filter[T any] struct {
 	input     Source[T]
 	predicate func(T) bool
 }
 
-// NewFilter creates a new Filter.
+// NewFilter returns a new Filter wrapping the given Source.
 func NewFilter[T any](input Source[T], predicate func(T) bool) *Filter[T] {
 	return &Filter[T]{input: input, predicate: predicate}
 }
 
-// Pull emits the next element that satisfies the predicate.
+// Pull retrieves the next element from the input Source that satisfies the predicate.
 func (ft *Filter[T]) Pull(ctx context.Context) (*T, error) {
 	for {
 		var next *T
@@ -298,7 +318,7 @@ func (ft *Filter[T]) Pull(ctx context.Context) (*T, error) {
 	}
 }
 
-// Close tells the source no more data will be Pull()ed.
+// Close releases resources associated with the Filter.
 func (ft *Filter[T]) Close() {
 	if ft.input != nil {
 		ft.input.Close()
@@ -308,21 +328,18 @@ func (ft *Filter[T]) Close() {
 	ft.predicate = nil
 }
 
-// Taker limits the number of elements returned from a source.
-//
-// Taker provides a way to process only the first `n` elements of a stream,
-// discarding the rest.
+// Taker limits the number of elements returned from a Source.
 type Taker[T any] struct {
 	input Source[T]
 	left  int
 }
 
-// NewTaker creates a new Taker that only returns the first elCount elements.
+// NewTaker returns a new Taker wrapping the given Source.
 func NewTaker[T any](input Source[T], elCount int) *Taker[T] {
 	return &Taker[T]{input: input, left: elCount}
 }
 
-// Pull emits the next element that satisfies the predicate.
+// Pull retrieves the next element, decrementing the remaining count.
 func (tt *Taker[T]) Pull(ctx context.Context) (*T, error) {
 	var next *T
 
@@ -360,7 +377,7 @@ func (tt *Taker[T]) Pull(ctx context.Context) (*T, error) {
 	return next, nil
 }
 
-// Close tells the source no more data will be Pull()ed.
+// Close releases resources associated with the Taker.
 func (tt *Taker[T]) Close() {
 	if tt.input != nil {
 		tt.input.Close()
@@ -369,7 +386,7 @@ func (tt *Taker[T]) Close() {
 	tt.input = nil
 }
 
-// NewDropper creates a new Taker that skips the first elCount elements.
+// NewDropper returns a Filter that skips the first elCount elements.
 func NewDropper[T any](input Source[T], elCount int) *Filter[T] {
 	skip := elCount
 
@@ -394,7 +411,12 @@ type ReduceTransformer[TIn, TOut any] struct {
 	accumulator []TOut
 }
 
-// NewReduceTransformer creates a new ReduceTransformer.
+// NewReduceTransformer returns a new ReduceTransformer instance.
+//
+// The ReduceTransformer applies a user-defined reduction function to each element of the input source.
+// The reducer function separates finalized output elements from an intermediate state.
+//
+// The input parameter specifies the source of elements, and the reducer processes each element incrementally.
 func NewReduceTransformer[TIn, TOut any](
 	input Source[TIn],
 	reducer func([]TOut, TIn) ([]TOut, []TOut),
@@ -408,6 +430,12 @@ func NewReduceTransformer[TIn, TOut any](
 }
 
 // Pull generates the next finalized element from the reduction or returns io.EOF when complete.
+//
+// It first processes any remaining finalized elements in the buffer. If the buffer is empty,
+// it pulls elements from the input source and applies the reducer function.
+//
+// The method returns a pointer to the next finalized element or an error indicating
+// cancellation, completion, or other issues.
 func (rt *ReduceTransformer[TIn, TOut]) Pull(ctx context.Context) (*TOut, error) {
 	ctxErr := ctx.Err()
 
@@ -455,8 +483,7 @@ func (rt *ReduceTransformer[TIn, TOut]) Pull(ctx context.Context) (*TOut, error)
 	return rt.Pull(ctx)
 }
 
-// closeInput tells the source no more data will be Pull()ed but retains
-// the remaining buffer to spool to consumer.
+// closeInput signals the input source to stop processing and retains any buffered elements.
 func (rt *ReduceTransformer[TIn, TOut]) closeInput() {
 	if rt.input != nil {
 		rt.input.Close()
@@ -465,7 +492,9 @@ func (rt *ReduceTransformer[TIn, TOut]) closeInput() {
 	rt.input = nil
 }
 
-// Close tells the source no more data will be Pull()ed.
+// Close releases all resources held by the ReduceTransformer and stops further processing.
+//
+// Any buffered elements are discarded, and the reducer function is cleared to prevent future use.
 func (rt *ReduceTransformer[TIn, TOut]) Close() {
 	rt.closeInput()
 	rt.buffer = nil
@@ -473,13 +502,16 @@ func (rt *ReduceTransformer[TIn, TOut]) Close() {
 	rt.reducer = nil
 }
 
-// Reducer consumes an entire input source and reduces it to a single output value.
+// Reducer processes an entire input source and reduces it to a single output value.
 type Reducer[TIn, TOut any] struct {
 	reducer    func(acc TOut, next TIn) TOut
 	initialAcc TOut
 }
 
-// NewReducer creates a new Reducer with an initial accumulator value.
+// NewReducer returns a new Reducer instance configured with the initial accumulator value.
+//
+// The reducer function processes each input element, updating the accumulator with each step.
+// The final value of the accumulator is returned once the input source is fully consumed.
 func NewReducer[TIn, TOut any](
 	initialAcc TOut,
 	reducer func(acc TOut, next TIn) TOut,
@@ -490,7 +522,12 @@ func NewReducer[TIn, TOut any](
 	}
 }
 
-// Reduce processes all elements from the input producer and returns the final reduced value.
+// Reduce consumes all elements from the input source and computes a single reduced value.
+//
+// It uses the provided reducer function to process each element, combining it into
+// the accumulator. When the input source is exhausted, the final accumulator value is returned.
+//
+// An error is returned if context cancellation or another error occurs during processing.
 func (rc *Reducer[TIn, TOut]) Reduce(ctx context.Context, input Source[TIn]) (TOut, error) {
 	acc := rc.initialAcc
 
