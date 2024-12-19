@@ -32,7 +32,7 @@
 // toStrMapper := NewMapper(filter, strconv.Itoa)                          // Convert to string
 // sink := NewSliceSink(&result)
 //
-// outResult, err := sink.Append(toStrMapper)
+// outResult, err := sink.Append(context.Background(), toStrMapper)
 //
 //	if err != nil {
 //		return // Fail
@@ -73,16 +73,30 @@ func (sf *sourceFunc[T]) Pull(ctx context.Context) (*T, error) {
 	var val *T
 
 	err := io.EOF
+	ctxErr := ctx.Err()
 
-	if (ctx.Err() == nil) && (sf.srcFunc != nil) {
+	if (ctxErr == nil) && (sf.srcFunc != nil) {
 		val, err = sf.srcFunc(ctx)
+		ctxErr = ctx.Err()
 	}
 
-	if (ctx.Err() != nil) || errors.Is(err, io.EOF) {
-		sf.Close()
+	if (err != nil) || (ctxErr != nil) {
+		switch {
+		case ctxErr != nil:
+			sf.Close()
+
+			return nil, fmt.Errorf("operation canceled: %w", ctxErr)
+		case errors.Is(err, io.EOF):
+			sf.Close()
+
+			return nil, io.EOF
+		default:
+			// we expect srcFunc to wrap its own errors.
+			return nil, err
+		}
 	}
 
-	return val, err
+	return val, nil
 }
 
 // Close tells the source no more data will be Pull()ed.
@@ -169,12 +183,14 @@ func (ss *SliceSink[T]) Append(ctx context.Context, input Source[T]) (*[]T, erro
 
 		if (err != nil) || (ctxErr != nil) {
 			switch {
-			case errors.Is(err, io.EOF):
-				return ss.dest, nil
 			case ctxErr != nil:
 				input.Close()
 
 				return nil, fmt.Errorf("operation canceled: %w", ctxErr)
+			case errors.Is(err, io.EOF):
+				input.Close()
+
+				return ss.dest, nil
 			default:
 				return nil, fmt.Errorf("data pull failed: %w", err)
 			}
@@ -209,14 +225,14 @@ func (mt *Mapper[TIn, TOut]) Pull(ctx context.Context) (*TOut, error) {
 
 	if (err != nil) || (ctxErr != nil) {
 		switch {
-		case errors.Is(err, io.EOF):
-			mt.Close()
-
-			return nil, io.EOF
 		case ctxErr != nil:
 			mt.Close()
 
 			return nil, fmt.Errorf("operation canceled: %w", ctxErr)
+		case errors.Is(err, io.EOF):
+			mt.Close()
+
+			return nil, io.EOF
 		default:
 			return nil, fmt.Errorf("data pull failed: %w", err)
 		}
@@ -263,14 +279,14 @@ func (ft *Filter[T]) Pull(ctx context.Context) (*T, error) {
 
 		if (ctxErr != nil) || (err != nil) {
 			switch {
-			case errors.Is(err, io.EOF):
-				ft.Close()
-
-				return nil, io.EOF
 			case ctxErr != nil:
 				ft.Close()
 
 				return nil, fmt.Errorf("operation canceled: %w", ctxErr)
+			case errors.Is(err, io.EOF):
+				ft.Close()
+
+				return nil, io.EOF
 			default:
 				return nil, fmt.Errorf("data pull failed: %w", err)
 			}
@@ -320,14 +336,14 @@ func (tt *Taker[T]) Pull(ctx context.Context) (*T, error) {
 
 	if (ctxErr != nil) || (err != nil) {
 		switch {
-		case errors.Is(err, io.EOF):
-			tt.Close()
-
-			return nil, io.EOF
 		case ctxErr != nil:
 			tt.Close()
 
 			return nil, fmt.Errorf("operation canceled: %w", ctxErr)
+		case errors.Is(err, io.EOF):
+			tt.Close()
+
+			return nil, io.EOF
 		default:
 			return nil, fmt.Errorf("data pull failed: %w", err)
 		}
@@ -419,16 +435,16 @@ func (rt *ReduceTransformer[TIn, TOut]) Pull(ctx context.Context) (*TOut, error)
 
 	if (ctxErr != nil) || (err != nil) {
 		switch {
+		case ctxErr != nil:
+			rt.Close()
+
+			return nil, fmt.Errorf("operation canceled: %w", ctxErr)
 		case errors.Is(err, io.EOF):
 			rt.closeInput()
 			rt.buffer = rt.accumulator
 			rt.accumulator = nil
 
 			return rt.Pull(ctx)
-		case ctxErr != nil:
-			rt.Close()
-
-			return nil, fmt.Errorf("operation canceled: %w", ctxErr)
 		default:
 			return nil, fmt.Errorf("data pull failed: %w", err)
 		}
@@ -491,12 +507,12 @@ func (rc *Reducer[TIn, TOut]) Reduce(ctx context.Context, input Source[TIn]) (TO
 
 		if (ctxErr != nil) || (err != nil) {
 			switch {
-			case errors.Is(err, io.EOF):
-				return acc, nil
 			case ctxErr != nil:
 				input.Close()
 
 				return *new(TOut), fmt.Errorf("operation canceled: %w", ctxErr)
+			case errors.Is(err, io.EOF):
+				return acc, nil
 			default:
 				return *new(TOut), fmt.Errorf("data pull failed: %w", err)
 			}
