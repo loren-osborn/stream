@@ -420,6 +420,146 @@ func TestSourceFuncCancelCtx(t *testing.T) {
 	assertErrorString(t, outErr, fmt.Errorf("operation canceled: %w", ctx.Err()))
 }
 
+// rawSourceFunc is a Source implementation backed by raw function calls.
+type rawSourceFunc[T any] struct {
+	srcFunc   func(context.Context) (*T, error)
+	closeFunc func()
+}
+
+// Pull calls the underlying source function to retrieve the next element.
+// It returns an error if the context is canceled or the source is exhausted.
+func (rsf *rawSourceFunc[T]) Pull(ctx context.Context) (*T, error) {
+	return rsf.srcFunc(ctx)
+}
+
+// Close releases the resources associated with the source function.
+func (rsf *rawSourceFunc[T]) Close() {
+	rsf.closeFunc()
+}
+
+// HelperCancelCtxOnPull tests cancellation of a context while something from a source.
+func HelperCancelCtxOnPull[TOut any](
+	t *testing.T,
+	pullerFactory func(src stream.Source[int]) func(ctx context.Context) (*TOut, error),
+) {
+	t.Helper()
+
+	sourceClosed := false
+	ctx, cancel := context.WithCancel(context.Background())
+
+	source := &rawSourceFunc[int]{
+		srcFunc: func(context.Context) (*int, error) {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				t.Errorf("context %v should not yet be canceled; got %v", ctx, ctxErr)
+			}
+
+			defer cancel() // cancel context on exit
+
+			outVal := 1
+
+			if sourceClosed {
+				t.Errorf("source should not be closed yet")
+			}
+
+			return &outVal, nil
+		},
+		closeFunc: func() {
+			sourceClosed = true
+		},
+	}
+
+	puller := pullerFactory(source)
+
+	if sourceClosed {
+		t.Errorf("source should not be closed yet")
+	}
+
+	resultPtr, outErr := puller(ctx)
+
+	if !sourceClosed {
+		t.Errorf("source should now be closed")
+	}
+
+	if resultPtr != nil {
+		t.Errorf("resultPtr should be nil, but was %v", *resultPtr)
+	}
+
+	assertErrorString(t, outErr, fmt.Errorf("operation canceled: %w", ctx.Err()))
+}
+
+// TestSliceSinkCancelCtx tests cancellation of a context while SliceSink pulls from its source.
+func TestSliceSinkCancelCtx(t *testing.T) {
+	t.Parallel()
+
+	HelperCancelCtxOnPull(t, func(src stream.Source[int]) func(ctx context.Context) (*[]int, error) {
+		destSlice := make([]int, 0, 4)
+
+		slicesink := stream.NewSliceSink[int](&destSlice)
+
+		return func(ctx context.Context) (*[]int, error) {
+			return slicesink.Append(ctx, src)
+		}
+	})
+}
+
+// TestMapperCancelCtx tests cancellation of a context while Mapper pulls from its source.
+func TestMapperCancelCtx(t *testing.T) {
+	t.Parallel()
+
+	HelperCancelCtxOnPull(t, func(src stream.Source[int]) func(ctx context.Context) (*int, error) {
+		mapper := stream.NewMapper(src, func(a int) int { return a })
+
+		return func(ctx context.Context) (*int, error) {
+			return mapper.Pull(ctx)
+		}
+	})
+}
+
+// TestFilterCancelCtx tests cancellation of a context while Filter pulls from its source.
+func TestFilterCancelCtx(t *testing.T) {
+	t.Parallel()
+
+	HelperCancelCtxOnPull(t, func(src stream.Source[int]) func(ctx context.Context) (*int, error) {
+		filter := stream.NewFilter(src, func(_ int) bool { return true })
+
+		return func(ctx context.Context) (*int, error) {
+			return filter.Pull(ctx)
+		}
+	})
+}
+
+// TestTakerCancelCtx tests cancellation of a context while Taker pulls from its source.
+func TestTakerCancelCtx(t *testing.T) {
+	t.Parallel()
+
+	HelperCancelCtxOnPull(t, func(src stream.Source[int]) func(ctx context.Context) (*int, error) {
+		taker := stream.NewTaker(src, 5)
+
+		return func(ctx context.Context) (*int, error) {
+			return taker.Pull(ctx)
+		}
+	})
+}
+
+// TestReducerCancelCtx tests cancellation of a context while Reducer pulls from its source.
+func TestReducerCancelCtx(t *testing.T) {
+	t.Parallel()
+
+	HelperCancelCtxOnPull(t, func(src stream.Source[int]) func(ctx context.Context) (*int, error) {
+		reducer := stream.NewReducer[int, int](0, func(acc int, next int) int { return acc + next })
+
+		return func(ctx context.Context) (*int, error) {
+			val, err := reducer.Reduce(ctx, src)
+
+			if val != 0 {
+				t.Errorf("val should be 0, but was %v", val)
+			}
+
+			return nil, err //nolint:wrapcheck
+		}
+	})
+}
+
 // TestNewDropperBasic tests the basic functionality of the NewDropper function.
 func TestNewDropperBasic(t *testing.T) {
 	t.Parallel()
