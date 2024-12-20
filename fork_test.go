@@ -206,3 +206,16 @@ func runSpoolerTests[T comparable](t *testing.T, testCases []SpoolerTestCase[T])
 		})
 	}
 }
+
+// TestSpoolerCancelCtx tests cancellation of a context while Spooler pulls from its source.
+func TestSpoolerCancelCtx(t *testing.T) {
+	t.Parallel()
+
+	HelperCancelCtxOnPull(t, func(src stream.Source[int]) func(ctx context.Context) (*int, error) {
+		reduceSpooler := stream.NewSpooler(src)
+
+		return func(ctx context.Context) (*int, error) {
+			return reduceSpooler.Pull(ctx)
+		}
+	})
+}

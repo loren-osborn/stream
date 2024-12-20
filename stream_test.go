@@ -541,6 +541,22 @@ func TestTakerCancelCtx(t *testing.T) {
 	})
 }
 
+// TestReduceTransformerCancelCtx tests cancellation of a context while ReduceTransformer pulls from its source.
+func TestReduceTransformerCancelCtx(t *testing.T) {
+	t.Parallel()
+
+	HelperCancelCtxOnPull(t, func(src stream.Source[int]) func(ctx context.Context) (*int, error) {
+		reduceTransformer := stream.NewReduceTransformer(
+			src,
+			func(last []int, next int) ([]int, []int) { return append(last, next), []int{} },
+		)
+
+		return func(ctx context.Context) (*int, error) {
+			return reduceTransformer.Pull(ctx)
+		}
+	})
+}
+
 // TestReducerCancelCtx tests cancellation of a context while Reducer pulls from its source.
 func TestReducerCancelCtx(t *testing.T) {
 	t.Parallel()
