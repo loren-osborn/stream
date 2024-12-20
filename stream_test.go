@@ -672,3 +672,87 @@ func ExampleReducer() {
 	result, _ := consumer.Reduce(context.Background(), filter)
 	fmt.Println(result) // Output: 20
 }
+
+// Define otherMockSource to track Close() calls.
+type otherMockSource struct {
+	items      []int
+	closed     bool
+	pullIndex  int
+	closeCalls int
+}
+
+// Pull retrieves the next item or returns io.EOF when all items are exhausted.
+func (m *otherMockSource) Pull(_ context.Context) (*int, error) {
+	if m.closed {
+		panic("Pull called on a closed source")
+	}
+
+	if m.pullIndex >= len(m.items) {
+		return nil, io.EOF
+	}
+
+	item := m.items[m.pullIndex]
+	m.pullIndex++
+
+	return &item, nil
+}
+
+// Close marks the source as closed and increments the closeCalls counter.
+func (m *otherMockSource) Close() {
+	if m.closed {
+		panic("Close called multiple times")
+	}
+
+	m.closed = true
+	m.closeCalls++
+}
+
+func TestTakerCloseOnEOF(t *testing.T) {
+	t.Parallel()
+
+	// Create a mock source with 5 items
+	mock := &otherMockSource{
+		items:      []int{1, 2, 3, 4, 5},
+		closed:     false,
+		pullIndex:  0,
+		closeCalls: 0,
+	}
+
+	// Create a Taker that limits to 3 items
+	taker := stream.NewTaker(mock, 3)
+
+	ctx := context.Background()
+
+	// Pull items and verify outputs
+	expectedItems := []int{1, 2, 3}
+	for _, expected := range expectedItems {
+		item, err := taker.Pull(ctx)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if item == nil || *item != expected {
+			t.Fatalf("expected %d, got %v", expected, item)
+		}
+	}
+
+	// Verify taker emits EOF and calls Close() on the source
+	item, err := taker.Pull(ctx)
+
+	if !errors.Is(err, io.EOF) { // Correctly check for EOF with errors.Is
+		t.Fatalf("expected EOF, got %v", err)
+	}
+
+	if item != nil {
+		t.Fatalf("expected nil, got %v", item)
+	}
+
+	// Check if the mock source Close() was called exactly once
+	if !mock.closed {
+		t.Fatalf("source was not closed")
+	}
+
+	if mock.closeCalls != 1 {
+		t.Fatalf("expected Close() to be called once, got %d calls", mock.closeCalls)
+	}
+}
