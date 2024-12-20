@@ -38,10 +38,11 @@ filter := NewFilter(squareMapper, func(n int) bool { return n%2 == 0 }) // Keep 
 toStrMapper := NewMapper(filter, strconv.Itoa)                          // Convert to string
 sink := NewSliceSink(&result)
 
-outResult, err := sink.Append(toStrMapper)
-if err != nil {
-    return // Fail
-}
+outResult, err := sink.Append(context.Background(), toStrMapper)
+
+ if err != nil {
+     return // Fail
+ }
 
 fmt.Println(strings.Join(*outResult, ", ")) // Output: 4, 16
 ```

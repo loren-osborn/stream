@@ -40,31 +40,31 @@
 //
 // Example 1: Mapping and Filtering
 //
-// var result []string
+//	var result []string
 //
-// data := []int{1, 2, 3, 4, 5}
-// source := NewSliceSource(data)
+//	data := []int{1, 2, 3, 4, 5}
+//	source := NewSliceSource(data)
 //
-// squareMapper := NewMapper(source, func(n int) int { return n * n })     // Square each number
-// filter := NewFilter(squareMapper, func(n int) bool { return n%2 == 0 }) // Keep even numbers
-// toStrMapper := NewMapper(filter, strconv.Itoa)                          // Convert to string
-// sink := NewSliceSink(&result)
+//	squareMapper := NewMapper(source, func(n int) int { return n * n })     // Square each number
+//	filter := NewFilter(squareMapper, func(n int) bool { return n%2 == 0 }) // Keep even numbers
+//	toStrMapper := NewMapper(filter, strconv.Itoa)                          // Convert to string
+//	sink := NewSliceSink(&result)
 //
-// outResult, err := sink.Append(context.Background(), toStrMapper)
+//	outResult, err := sink.Append(context.Background(), toStrMapper)
 //
 //	if err != nil {
 //		return // Fail
 //	}
 //
-// fmt.Println(strings.Join(*outResult, ", ")) // Output: 4, 16
+//	fmt.Println(strings.Join(*outResult, ", ")) // Output: 4, 16
 //
 // Example 2: Reducing
 //
-// data := []int{1, 2, 3, 4, 5}
-// source := NewSliceSource(data)
-// reducer := NewReducer(0, func(acc, next int) int { return acc + next })
-// result, _ := reducer.Reduce(source)
-// fmt.Println(result) // Output: 15
+//	data := []int{1, 2, 3, 4, 5}
+//	source := NewSliceSource(data)
+//	reducer := NewReducer(0, func(acc, next int) int { return acc + next })
+//	result, _ := reducer.Reduce(source)
+//	fmt.Println(result) // Output: 15
 //
 // The above example demonstrates the use of Sources, Transformers, and a Sink
 // to create and consume a stream of data.

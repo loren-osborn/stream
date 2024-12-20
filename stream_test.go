@@ -375,6 +375,51 @@ func TestTransformerErrorHandling(t *testing.T) {
 	}
 }
 
+// TestSourceFuncCancelCtx tests cancellation of a context while SourceFunc pulls from its lambda.
+func TestSourceFuncCancelCtx(t *testing.T) {
+	t.Parallel()
+
+	sourceClosed := false
+	ctx, cancel := context.WithCancel(context.Background())
+
+	source := stream.SourceFunc(
+		func(context.Context) (*int, error) {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				t.Errorf("context %v should not yet be canceled; got %v", ctx, ctxErr)
+			}
+
+			defer cancel() // cancel context on exit
+
+			outVal := 1
+
+			if sourceClosed {
+				t.Errorf("source should not be closed yet")
+			}
+
+			return &outVal, nil
+		},
+		func() {
+			sourceClosed = true
+		},
+	)
+
+	if sourceClosed {
+		t.Errorf("source should not be closed yet")
+	}
+
+	resultPtr, outErr := source.Pull(ctx)
+
+	if !sourceClosed {
+		t.Errorf("source should now be closed")
+	}
+
+	if resultPtr != nil {
+		t.Errorf("resultPtr should be nil, but was %v", *resultPtr)
+	}
+
+	assertErrorString(t, outErr, fmt.Errorf("operation canceled: %w", ctx.Err()))
+}
+
 // TestNewDropperBasic tests the basic functionality of the NewDropper function.
 func TestNewDropperBasic(t *testing.T) {
 	t.Parallel()
