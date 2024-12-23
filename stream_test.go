@@ -660,62 +660,49 @@ func assertErrorString(t *testing.T, got, want error) {
 	}
 }
 
-// ExampleReducer demonstrates a complete pipeline of producers, transformers, and consumers.
-func ExampleReducer() {
-	data := []int{1, 2, 3, 4, 5}
-	source := stream.NewSliceSource(data)
-
-	mapper := stream.NewMapper(source, func(n int) int { return n * n })     // Square each number
-	filter := stream.NewFilter(mapper, func(n int) bool { return n%2 == 0 }) // Keep even squares
-	consumer := stream.NewReducer(0, func(acc, next int) int { return acc + next })
-
-	result, _ := consumer.Reduce(context.Background(), filter)
-	fmt.Println(result) // Output: 20
-}
-
-// Define otherMockSource to track Close() calls.
-type otherMockSource struct {
-	items      []int
-	closed     bool
-	pullIndex  int
-	closeCalls int
-}
-
-// Pull retrieves the next item or returns io.EOF when all items are exhausted.
-func (m *otherMockSource) Pull(_ context.Context) (*int, error) {
-	if m.closed {
-		panic("Pull called on a closed source")
-	}
-
-	if m.pullIndex >= len(m.items) {
-		return nil, io.EOF
-	}
-
-	item := m.items[m.pullIndex]
-	m.pullIndex++
-
-	return &item, nil
-}
-
-// Close marks the source as closed and increments the closeCalls counter.
-func (m *otherMockSource) Close() {
-	if m.closed {
-		panic("Close called multiple times")
-	}
-
-	m.closed = true
-	m.closeCalls++
-}
-
+//nolint:funlen
 func TestTakerCloseOnEOF(t *testing.T) {
 	t.Parallel()
 
+	// Define mockSourceData to track Close() calls.
+	type mockSourceData struct {
+		items      []int
+		closed     bool
+		pullIndex  int
+		closeCalls int
+	}
+
 	// Create a mock source with 5 items
-	mock := &otherMockSource{
+	mockData := &mockSourceData{
 		items:      []int{1, 2, 3, 4, 5},
 		closed:     false,
 		pullIndex:  0,
 		closeCalls: 0,
+	}
+
+	mock := &rawSourceFunc[int]{
+		srcFunc: func(_ context.Context) (*int, error) {
+			if mockData.closed {
+				panic("Pull called on a closed source")
+			}
+
+			if mockData.pullIndex >= len(mockData.items) {
+				return nil, io.EOF
+			}
+
+			item := mockData.items[mockData.pullIndex]
+			mockData.pullIndex++
+
+			return &item, nil
+		},
+		closeFunc: func() {
+			if mockData.closed {
+				panic("Close called multiple times")
+			}
+
+			mockData.closed = true
+			mockData.closeCalls++
+		},
 	}
 
 	// Create a Taker that limits to 3 items
@@ -748,11 +735,24 @@ func TestTakerCloseOnEOF(t *testing.T) {
 	}
 
 	// Check if the mock source Close() was called exactly once
-	if !mock.closed {
+	if !mockData.closed {
 		t.Fatalf("source was not closed")
 	}
 
-	if mock.closeCalls != 1 {
-		t.Fatalf("expected Close() to be called once, got %d calls", mock.closeCalls)
+	if mockData.closeCalls != 1 {
+		t.Fatalf("expected Close() to be called once, got %d calls", mockData.closeCalls)
 	}
+}
+
+// ExampleReducer demonstrates a complete pipeline of producers, transformers, and consumers.
+func ExampleReducer() {
+	data := []int{1, 2, 3, 4, 5}
+	source := stream.NewSliceSource(data)
+
+	mapper := stream.NewMapper(source, func(n int) int { return n * n })     // Square each number
+	filter := stream.NewFilter(mapper, func(n int) bool { return n%2 == 0 }) // Keep even squares
+	consumer := stream.NewReducer(0, func(acc, next int) int { return acc + next })
+
+	result, _ := consumer.Reduce(context.Background(), filter)
+	fmt.Println(result) // Output: 20
 }
