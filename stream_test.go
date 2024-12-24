@@ -158,23 +158,26 @@ func TestReduceTransformer(t *testing.T) {
 	}
 }
 
-type sinkErrorTestCase struct {
-	name          string
-	sourceError   error
-	expectedError error
+type errorTestCase struct {
+	name              string
+	sourceError       error
+	expectedError     error
+	expectedSinkError bool
 }
 
-func getSinkErrorTestCases() []sinkErrorTestCase {
-	return []sinkErrorTestCase{
+func getErrorTestCases() []errorTestCase {
+	return []errorTestCase{
 		{
-			name:          "EOF",
-			sourceError:   io.EOF,
-			expectedError: nil,
+			name:              "EOF",
+			sourceError:       io.EOF,
+			expectedError:     io.EOF,
+			expectedSinkError: false,
 		},
 		{
-			name:          "ErrorHandling",
-			sourceError:   ErrTestOriginalError,
-			expectedError: fmt.Errorf("data pull failed: %w", ErrTestOriginalError),
+			name:              "ErrorHandling",
+			sourceError:       ErrTestOriginalError,
+			expectedError:     fmt.Errorf("data pull failed: %w", ErrTestOriginalError),
+			expectedSinkError: true,
 		},
 	}
 }
@@ -219,8 +222,7 @@ func getSinkOutputTestCase() []sinkOutputTestCase[int] {
 func TestSinkErrorHandling(t *testing.T) {
 	t.Parallel()
 
-	for _, testCase := range CartesianProduct(getSinkErrorTestCases(), getSinkOutputTestCase()) {
-		// range getSinkErrorTestCases() {
+	for _, testCase := range CartesianProduct(getErrorTestCases(), getSinkOutputTestCase()) {
 		t.Run(fmt.Sprintf("%s %s", testCase.Second.name, testCase.First.name), func(t *testing.T) {
 			t.Parallel()
 
@@ -236,7 +238,13 @@ func TestSinkErrorHandling(t *testing.T) {
 
 			val, err := testCase.Second.generator(outerCtx, source)
 
-			if testCase.First.expectedError != nil && !(reflect.ValueOf(val).IsNil()) {
+			if !testCase.First.expectedSinkError {
+				assertErrorString(t, err, nil)
+
+				return
+			}
+
+			if !(reflect.ValueOf(val).IsNil()) {
 				if err == nil {
 					t.Errorf("Got non-nil value %v when error expected", val)
 				} else {
@@ -246,30 +254,6 @@ func TestSinkErrorHandling(t *testing.T) {
 
 			assertErrorString(t, err, testCase.First.expectedError)
 		})
-	}
-}
-
-type transformErrorTestCase struct {
-	name          string
-	ctxGen        func() context.Context
-	sourceError   error
-	expectedError error
-}
-
-func getTransformErrorTestCases() []transformErrorTestCase {
-	return []transformErrorTestCase{
-		{
-			name:          "EOF blocking",
-			ctxGen:        context.Background,
-			sourceError:   io.EOF,
-			expectedError: io.EOF,
-		},
-		{
-			name:          "ErrorHandling blocking",
-			ctxGen:        context.Background,
-			sourceError:   ErrTestOriginalError,
-			expectedError: fmt.Errorf("data pull failed: %w", ErrTestOriginalError),
-		},
 	}
 }
 
@@ -340,7 +324,7 @@ func getTransformerIntOutputTestCase() []transformerOutputTestCase[int] {
 func TestTransformerErrorHandling(t *testing.T) {
 	t.Parallel()
 
-	for _, testCase := range CartesianProduct(getTransformErrorTestCases(), getTransformerIntOutputTestCase()) {
+	for _, testCase := range CartesianProduct(getErrorTestCases(), getTransformerIntOutputTestCase()) {
 		t.Run(fmt.Sprintf("%s %s", testCase.Second.name, testCase.First.name), func(t *testing.T) {
 			t.Parallel()
 
@@ -348,7 +332,7 @@ func TestTransformerErrorHandling(t *testing.T) {
 				t.Errorf("BAD TEST: Should expect an error")
 			}
 
-			outerCtx := testCase.First.ctxGen()
+			outerCtx := context.Background()
 
 			source := stream.SourceFunc[int](func(ctx context.Context) (*int, error) {
 				if outerCtx != ctx {
@@ -660,7 +644,7 @@ func assertErrorString(t *testing.T, got, want error) {
 	}
 }
 
-//nolint:funlen
+//nolint:funlen // **FIXME**
 func TestTakerCloseOnEOF(t *testing.T) {
 	t.Parallel()
 
