@@ -153,7 +153,7 @@ func TestMultiReaderBuf_Range(t *testing.T) {
 	}
 }
 
-//nolint: funlen // *FIXME*
+// nolint: funlen // *FIXME*
 func TestMultiReaderBuf_Range_FromReaderObj(t *testing.T) {
 	t.Parallel()
 
@@ -291,7 +291,7 @@ func TestMultiReaderBuf_Range_EarlyExit(t *testing.T) {
 	}
 }
 
-//nolint: funlen,gocognit // *FIXME*
+// nolint: funlen,gocognit // *FIXME*
 func TestMultiReaderBuf_ConcurrentAccess(t *testing.T) {
 	t.Parallel()
 
@@ -474,7 +474,7 @@ func TestMultiReaderBuf_IndexAfter_PanicHandling(t *testing.T) {
 	_ = ringBuf.ReaderAt(0, rangeLen)
 }
 
-//nolint: cyclop // *FIXME*
+// nolint: cyclop // *FIXME*
 func TestMultiReaderBuf_ReaderPeekFirst(t *testing.T) {
 	t.Parallel()
 
@@ -535,7 +535,7 @@ func TestMultiReaderBuf_ReaderPeekFirst(t *testing.T) {
 	_, _ = mrb.ReaderPeekFirst(999) // Invalid ID
 }
 
-//nolint: cyclop,funlen // *FIXME*
+// nolint: cyclop,funlen // *FIXME*
 func TestMultiReaderBuf_ReaderConsumeFirst(t *testing.T) {
 	t.Parallel()
 
@@ -656,7 +656,7 @@ func TestMultiReaderBuf_ReaderToSlice(t *testing.T) {
 	})
 }
 
-//nolint: funlen // *FIXME*
+// nolint: funlen // *FIXME*
 func TestMultiReaderBuf_CloseReader(t *testing.T) {
 	t.Parallel()
 
@@ -1202,7 +1202,7 @@ func TestMultiReaderBuf_CloseReaderWithHigherRangeFirst(t *testing.T) {
 	}
 }
 
-//nolint: funlen // *FIXME*
+// nolint: funlen // *FIXME*
 func TestMultiReaderBuf_CloseReaderWithLowerRangeFirst(t *testing.T) {
 	t.Parallel()
 

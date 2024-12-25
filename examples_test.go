@@ -1,4 +1,4 @@
-//nolint: testpackage // This is to keep the example code in sync with the API
+// nolint: testpackage // This is to keep the example code in sync with the API
 package stream
 
 import (
