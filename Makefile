@@ -510,7 +510,7 @@ coverage.html: coverage.out Makefile
 	go tool cover -html=coverage.out -o coverage.html
 
 coverage.out: $(shell find $(PROD_GO_PACKAGES) -type f -name '*.go' | sed -e 's,^\./,,' | sort -u) Makefile
-	go test -race -cover -coverprofile=coverage.out  ./... || (rm coverage.out ; false)
+	go test -race -timeout=60s -cover -coverprofile=coverage.out  ./... || (rm coverage.out ; false)
 
 # Lint the code
 lint:

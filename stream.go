@@ -15,13 +15,24 @@
 //   - Sink: A conceptual construct representing the consumption of elements, often
 //     used to aggregate or process data from a Source.
 //   - Transformer: A conceptual construct combining the behavior of a Source and a Sink.
-//     Transformers take input from a Source, apply a transformation, and acts as
+//     Transformers take input from a Source, apply a transformation, and act as
 //     a new Source for output.
 //
-// Note: While `Source[T]` is an actual Go interface defined in this package, the
+// Note: While Source[T] is an actual Go interface defined in this package, the
 // Sink and Transformer are conceptual constructs and not explicitly defined as
 // interfaces or types in this package. They are described here to aid understanding
 // and avoid confusion when working with the components provided.
+//
+// # Source[T] Lifecycle
+//
+// Sources have clear responsibilities for resource management and predictable
+// behavior:
+//
+//   - A Source[T] that reaches io.EOF is responsible for closing itself.
+//   - If a Sink closes a Source[T], the Sink assumes responsibility for ensuring
+//     that the Source is properly closed.
+//   - The Close method on a Source[T] must be idempotent. Calling Close multiple
+//     times should have no effect after the first call.
 //
 // # Common Implementations
 //
@@ -208,8 +219,6 @@ func (ss *SliceSink[T]) Append(ctx context.Context, input Source[T]) (*[]T, erro
 
 				return nil, fmt.Errorf("operation canceled: %w", ctxErr)
 			case errors.Is(err, io.EOF):
-				input.Close()
-
 				return ss.dest, nil
 			default:
 				return nil, fmt.Errorf("data pull failed: %w", err)
@@ -250,6 +259,7 @@ func (mt *Mapper[TIn, TOut]) Pull(ctx context.Context) (*TOut, error) {
 
 			return nil, fmt.Errorf("operation canceled: %w", ctxErr)
 		case errors.Is(err, io.EOF):
+			mt.input = nil // Source should have already closed itself
 			mt.Close()
 
 			return nil, io.EOF
@@ -259,6 +269,12 @@ func (mt *Mapper[TIn, TOut]) Pull(ctx context.Context) (*TOut, error) {
 	}
 
 	nextOut := mt.mapFn(*nextIn)
+
+	if ctxErr = ctx.Err(); ctxErr != nil {
+		mt.Close()
+
+		return nil, fmt.Errorf("operation canceled: %w", ctxErr)
+	}
 
 	return &nextOut, nil
 }
@@ -304,6 +320,7 @@ func (ft *Filter[T]) Pull(ctx context.Context) (*T, error) {
 
 				return nil, fmt.Errorf("operation canceled: %w", ctxErr)
 			case errors.Is(err, io.EOF):
+				ft.input = nil // Source should have already closed itself
 				ft.Close()
 
 				return nil, io.EOF
@@ -358,6 +375,7 @@ func (tt *Taker[T]) Pull(ctx context.Context) (*T, error) {
 
 			return nil, fmt.Errorf("operation canceled: %w", ctxErr)
 		case errors.Is(err, io.EOF):
+			tt.input = nil // Source should have already closed itself
 			tt.Close()
 
 			return nil, io.EOF
@@ -468,7 +486,7 @@ func (rt *ReduceTransformer[TIn, TOut]) Pull(ctx context.Context) (*TOut, error)
 
 			return nil, fmt.Errorf("operation canceled: %w", ctxErr)
 		case errors.Is(err, io.EOF):
-			rt.closeInput()
+			rt.input = nil // Source should have already closed itself
 			rt.buffer = rt.accumulator
 			rt.accumulator = nil
 

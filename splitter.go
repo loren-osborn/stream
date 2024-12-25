@@ -72,10 +72,11 @@ func (s *Spooler[T]) Pull(ctx context.Context) (*T, error) {
 	if (ctxErr != nil) || (err != nil) {
 		switch {
 		case ctxErr != nil:
-			s.input.Close()
+			s.Close()
 
 			return nil, fmt.Errorf("operation canceled: %w", ctxErr)
 		case errors.Is(err, io.EOF):
+			s.input = nil // Source should have already closed itself
 			s.Close()
 
 			return nil, io.EOF

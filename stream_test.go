@@ -158,52 +158,231 @@ func TestReduceTransformer(t *testing.T) {
 	}
 }
 
-type errorTestCase struct {
-	name              string
-	sourceError       error
-	expectedError     error
-	expectedSinkError bool
+// ErrorTestBehaviorFlags defines named behviours and expectations for more readable test cases.
+type ErrorTestBehaviorFlags int
+
+// Define behaviors and expectations for TestSinkErrorHandling and TestTransformerErrorHandling tests.
+const (
+	PreCancelContext         ErrorTestBehaviorFlags = 1 << iota // Cancel context before starting test
+	ExpectCloseInsteadOfPull                                    // Expect Close() to be called instead of Pull()
+	ExpectPullCall                                              // Expect Pull() to be called
+	CancelWithinPullCall                                        // Context should cancel (Pull()
+	// should return cancelation error).
+	DeferCancelFromPullCall // Pull() will return dummy data
+	// with nil error, but cancel context in defer.
+	ExpectCloseAfterPull      // Expect Close to be called after return from Pull()
+	ExpectPredicateCall       // Expect Predicate to be called (if there is one)
+	CancelWithinPredicateCall // Predicate will cancel context
+	// (by calling predicateLambda).
+	ExpectCloseAfterPredicate // Expect Close() to be called after predicate
+)
+
+type emittedLambdas struct {
+	ctxGen          func() context.Context
+	pullLambda      func(context.Context) (*int, error)
+	closeLambda     func()
+	predicateLambda func()
+	finalLambda     func()
 }
 
-func getErrorTestCases() []errorTestCase {
+type errorTestCase struct {
+	name              string
+	lambdaEmitter     func(*testing.T) *emittedLambdas
+	expectedError     error
+	expectedSinkError bool
+	needPredicate     bool
+}
+
+//nolint:funlen,gocognit,cyclop // **FIXME**
+func getErrorTestCases(t *testing.T) []errorTestCase {
+	t.Helper()
+
+	type contextKeyTestName struct{}
+
+	lambdaEmitterFactory := func(flags ErrorTestBehaviorFlags, pullErr error) func(*testing.T) *emittedLambdas {
+		return func(t *testing.T) *emittedLambdas {
+			t.Helper()
+
+			testName := t.Name()
+			cancelableCtx, cancel := context.WithCancel(context.Background())
+			finalCtx := context.WithValue(cancelableCtx, contextKeyTestName{}, testName)
+			pullCallCount := 0
+			closeCallCount := 0
+			predicateCallCount := 0
+
+			if flags&PreCancelContext != 0 {
+				cancel()
+			}
+
+			return &emittedLambdas{
+				ctxGen: func() context.Context {
+					return finalCtx
+				},
+				pullLambda: func(ctx context.Context) (*int, error) {
+					if (flags&ExpectCloseInsteadOfPull != 0) || (flags&ExpectPullCall == 0) {
+						t.Errorf("In Pull() call when not expected")
+					}
+
+					if flags&CancelWithinPullCall != 0 {
+						cancel()
+					}
+
+					defer (func() {
+						if flags&DeferCancelFromPullCall != 0 {
+							cancel()
+						}
+					})()
+
+					pullCallCount++
+					if pullCallCount > 1 {
+						t.Errorf("Pull() unexpectedly called %d times.", pullCallCount)
+					}
+
+					if closeCallCount > 0 {
+						t.Errorf("Close() unexpectedly called (%d times) before Pull().", closeCallCount)
+					}
+
+					if predicateCallCount > 0 {
+						t.Errorf("predicate unexpectedly called (%d times) before Pull().", predicateCallCount)
+					}
+
+					if pullCallCount+closeCallCount+predicateCallCount > 16 {
+						t.Fatalf("Runaway execution detected Pull().")
+					}
+
+					anyTestName := ctx.Value(contextKeyTestName{})
+					if innerTestName, ok := anyTestName.(string); !ok || testName != innerTestName {
+						t.Errorf("Didn't get expected context %v, got %v instead", finalCtx, ctx)
+					}
+
+					if pullErr == nil {
+						val := 1
+
+						return &val, nil
+					}
+
+					return nil, pullErr
+				},
+				closeLambda: func() {
+					if flags&(ExpectCloseInsteadOfPull|ExpectCloseAfterPull|ExpectCloseAfterPredicate) == 0 {
+						t.Errorf("In Close() call when not expected")
+					}
+
+					closeCallCount++
+
+					if closeCallCount > 1 {
+						t.Errorf("Close() unexpectedly called %d times (more than one).", closeCallCount)
+					}
+				},
+				predicateLambda: func() {
+					predicateCallCount++
+
+					if predicateCallCount > 1 {
+						t.Errorf("predicate unexpectedly called %d times (more than one).", predicateCallCount)
+					}
+
+					if flags&CancelWithinPredicateCall != 0 {
+						cancel()
+					}
+				},
+				finalLambda: func() {
+					expectedCloseCalls := 0
+					if flags&(ExpectCloseInsteadOfPull|ExpectCloseAfterPull|ExpectCloseAfterPredicate) != 0 {
+						expectedCloseCalls = 1
+					}
+					if closeCallCount != expectedCloseCalls {
+						t.Errorf("Close() called %d times when %d expected", closeCallCount, expectedCloseCalls)
+					}
+				},
+			}
+		}
+	}
+
 	return []errorTestCase{
 		{
+			name:              "Pre-canceled",
+			lambdaEmitter:     lambdaEmitterFactory(PreCancelContext|ExpectCloseInsteadOfPull, nil),
+			expectedError:     fmt.Errorf("operation canceled: %w", context.Canceled),
+			expectedSinkError: true,
+			needPredicate:     false,
+		},
+		{
+			name:              "Canceled In Pull with unwrapped Error",
+			lambdaEmitter:     lambdaEmitterFactory(ExpectPullCall|CancelWithinPullCall|ExpectCloseAfterPull, context.Canceled),
+			expectedError:     fmt.Errorf("operation canceled: %w", context.Canceled),
+			expectedSinkError: true,
+			needPredicate:     false,
+		},
+		{
+			name: "Canceled In Pull with wrapped Error",
+			lambdaEmitter: lambdaEmitterFactory(
+				ExpectPullCall|CancelWithinPullCall|ExpectCloseAfterPull,
+				fmt.Errorf("operation canceled: %w", context.Canceled),
+			),
+			expectedError:     fmt.Errorf("operation canceled: %w", context.Canceled),
+			expectedSinkError: true,
+			needPredicate:     false,
+		},
+		{
+			name:              "Canceled after Pull return",
+			lambdaEmitter:     lambdaEmitterFactory(ExpectPullCall|DeferCancelFromPullCall|ExpectCloseAfterPull, nil),
+			expectedError:     fmt.Errorf("operation canceled: %w", context.Canceled),
+			expectedSinkError: true,
+			needPredicate:     false,
+		},
+		{
+			name: "Canceled in predicate",
+			lambdaEmitter: lambdaEmitterFactory(
+				ExpectPullCall|ExpectPredicateCall|CancelWithinPredicateCall|ExpectCloseAfterPredicate,
+				nil,
+			),
+			expectedError:     fmt.Errorf("operation canceled: %w", context.Canceled),
+			expectedSinkError: true,
+			needPredicate:     true,
+		},
+		{
 			name:              "EOF",
-			sourceError:       io.EOF,
+			lambdaEmitter:     lambdaEmitterFactory(ExpectPullCall|ExpectPredicateCall, io.EOF),
 			expectedError:     io.EOF,
 			expectedSinkError: false,
+			needPredicate:     false,
 		},
 		{
 			name:              "ErrorHandling",
-			sourceError:       ErrTestOriginalError,
+			lambdaEmitter:     lambdaEmitterFactory(ExpectPullCall|ExpectPredicateCall, ErrTestOriginalError),
 			expectedError:     fmt.Errorf("data pull failed: %w", ErrTestOriginalError),
 			expectedSinkError: true,
+			needPredicate:     false,
 		},
 	}
 }
 
 type sinkOutputTestCase[T any] struct {
 	name      string
-	generator func(context.Context, stream.Source[T]) (any, error) // returning any, because we only care about nil-ness
+	// returning any, because we only care about nil-ness
+	generator func(context.Context, stream.Source[T], func()) (any, error)
+	hasPredicate bool
 }
 
 func getSinkOutputTestCase() []sinkOutputTestCase[int] {
 	return []sinkOutputTestCase[int]{
 		{
 			name: "SliceSink",
-			generator: func(ctx context.Context, src stream.Source[int]) (any, error) {
+			generator: func(ctx context.Context, src stream.Source[int], _ func()) (any, error) {
 				dummyDest := []int{}
 				sink := stream.NewSliceSink(&dummyDest)
 
 				return sink.Append(ctx, src)
 			},
+			hasPredicate: false,
 		},
 		{
 			name: "Reducer",
-			generator: func(ctx context.Context, src stream.Source[int]) (any, error) {
+			generator: func(ctx context.Context, src stream.Source[int], inPredicate func()) (any, error) {
 				reducer := stream.NewReducer(
 					nil,
 					func(acc []int, next int) []int {
+						inPredicate()
 						if acc == nil {
 							acc = []int{0}
 						}
@@ -214,6 +393,7 @@ func getSinkOutputTestCase() []sinkOutputTestCase[int] {
 
 				return reducer.Reduce(ctx, src)
 			},
+			hasPredicate: true,
 		},
 	}
 }
@@ -222,21 +402,25 @@ func getSinkOutputTestCase() []sinkOutputTestCase[int] {
 func TestSinkErrorHandling(t *testing.T) {
 	t.Parallel()
 
-	for _, testCase := range CartesianProduct(getErrorTestCases(), getSinkOutputTestCase()) {
+	for _, tCase := range CartesianProduct(getErrorTestCases(t), getSinkOutputTestCase()) {
+		testCase := tCase
+		if testCase.First.needPredicate && !testCase.Second.hasPredicate {
+			continue // Invalid test
+		}
+
 		t.Run(fmt.Sprintf("%s %s", testCase.Second.name, testCase.First.name), func(t *testing.T) {
 			t.Parallel()
 
-			outerCtx := context.Background()
+			lambdas := testCase.First.lambdaEmitter(t)
+			outerCtx := lambdas.ctxGen()
+			source := &rawSourceFunc[int]{
+				srcFunc:   lambdas.pullLambda,
+				closeFunc: lambdas.closeLambda,
+			}
 
-			source := stream.SourceFunc[int](func(ctx context.Context) (*int, error) {
-				if outerCtx != ctx {
-					t.Errorf("Pulled contexts didn't match. Outer: %v, Inner: %v", outerCtx, ctx)
-				}
+			val, err := testCase.Second.generator(outerCtx, source, lambdas.predicateLambda)
 
-				return nil, testCase.First.sourceError
-			}, nil)
-
-			val, err := testCase.Second.generator(outerCtx, source)
+			lambdas.finalLambda()
 
 			if !testCase.First.expectedSinkError {
 				assertErrorString(t, err, nil)
@@ -258,46 +442,61 @@ func TestSinkErrorHandling(t *testing.T) {
 }
 
 type transformerOutputTestCase[T any] struct {
-	name      string
-	generator func(stream.Source[T], context.Context) func() (*T, error)
+	name         string
+	generator    func(stream.Source[T], context.Context, func()) func() (*T, error)
+	hasPredicate bool
 }
 
+//nolint:funlen // **FIXME**
 func getTransformerIntOutputTestCase() []transformerOutputTestCase[int] {
 	return []transformerOutputTestCase[int]{
 		{
 			name: "Mapper",
-			generator: func(src stream.Source[int], ctx context.Context) func() (*int, error) {
-				mapper := stream.NewMapper(src, func(n int) int { return n * 2 })
+			generator: func(src stream.Source[int], ctx context.Context, inPredicate func()) func() (*int, error) {
+				mapper := stream.NewMapper(src, func(n int) int {
+					inPredicate()
+
+					return n * 2
+				})
 
 				return func() (*int, error) {
 					return mapper.Pull(ctx)
 				}
 			},
+			hasPredicate: true,
 		},
 		{
 			name: "Filter",
-			generator: func(src stream.Source[int], ctx context.Context) func() (*int, error) {
-				filter := stream.NewFilter(src, func(n int) bool { return n%2 == 0 })
+			generator: func(src stream.Source[int], ctx context.Context, inPredicate func()) func() (*int, error) {
+				filter := stream.NewFilter(src, func(n int) bool {
+					inPredicate()
+
+					return n%2 == 0
+				})
 
 				return func() (*int, error) {
 					return filter.Pull(ctx)
 				}
 			},
+			hasPredicate: true,
 		},
 		{
 			name: "Taker",
-			generator: func(src stream.Source[int], ctx context.Context) func() (*int, error) {
+			generator: func(src stream.Source[int], ctx context.Context, _ func()) func() (*int, error) {
 				taker := stream.NewTaker(src, 3)
 
 				return func() (*int, error) {
 					return taker.Pull(ctx)
 				}
 			},
+			hasPredicate: false,
 		},
 		{
 			name: "ReduceTransformer",
-			generator: func(src stream.Source[int], ctx context.Context) func() (*int, error) {
+			generator: func(src stream.Source[int], ctx context.Context, inPredicate func()) func() (*int, error) {
 				reducer := func(acc []int, next int) ([]int, []int) {
+					inPredicate()
+
 					return append(acc, next), nil
 				}
 				transformer := stream.NewReduceTransformer(src, reducer)
@@ -306,16 +505,18 @@ func getTransformerIntOutputTestCase() []transformerOutputTestCase[int] {
 					return transformer.Pull(ctx)
 				}
 			},
+			hasPredicate: true,
 		},
 		{
 			name: "Spooler",
-			generator: func(src stream.Source[int], ctx context.Context) func() (*int, error) {
+			generator: func(src stream.Source[int], ctx context.Context, _ func()) func() (*int, error) {
 				spooler := stream.NewSpooler(src)
 
 				return func() (*int, error) {
 					return spooler.Pull(ctx)
 				}
 			},
+			hasPredicate: false,
 		},
 	}
 }
@@ -324,7 +525,12 @@ func getTransformerIntOutputTestCase() []transformerOutputTestCase[int] {
 func TestTransformerErrorHandling(t *testing.T) {
 	t.Parallel()
 
-	for _, testCase := range CartesianProduct(getErrorTestCases(), getTransformerIntOutputTestCase()) {
+	for _, tCase := range CartesianProduct(getErrorTestCases(t), getTransformerIntOutputTestCase()) {
+		testCase := tCase
+		if testCase.First.needPredicate && !testCase.Second.hasPredicate {
+			continue // Invalid test
+		}
+
 		t.Run(fmt.Sprintf("%s %s", testCase.Second.name, testCase.First.name), func(t *testing.T) {
 			t.Parallel()
 
@@ -332,19 +538,18 @@ func TestTransformerErrorHandling(t *testing.T) {
 				t.Errorf("BAD TEST: Should expect an error")
 			}
 
-			outerCtx := context.Background()
+			lambdas := testCase.First.lambdaEmitter(t)
+			outerCtx := lambdas.ctxGen()
+			source := &rawSourceFunc[int]{
+				srcFunc:   lambdas.pullLambda,
+				closeFunc: lambdas.closeLambda,
+			}
 
-			source := stream.SourceFunc[int](func(ctx context.Context) (*int, error) {
-				if outerCtx != ctx {
-					t.Errorf("Pulled contexts didn't match. Outer: %v, Inner: %v", outerCtx, ctx)
-				}
-
-				return nil, testCase.First.sourceError
-			}, nil)
-
-			puller := testCase.Second.generator(source, outerCtx)
+			puller := testCase.Second.generator(source, outerCtx, lambdas.predicateLambda)
 
 			val, err := puller()
+
+			lambdas.finalLambda()
 
 			if val != nil {
 				if err == nil {
@@ -555,7 +760,7 @@ func TestReducerCancelCtx(t *testing.T) {
 				t.Errorf("val should be 0, but was %v", val)
 			}
 
-			return nil, err //nolint:wrapcheck
+			return nil, err //nolint:wrapcheck // mock
 		}
 	})
 }
@@ -725,6 +930,54 @@ func TestTakerCloseOnEOF(t *testing.T) {
 
 	if mockData.closeCalls != 1 {
 		t.Fatalf("expected Close() to be called once, got %d calls", mockData.closeCalls)
+	}
+}
+
+// wrappedError is a custom error type for wrapping another error.
+type wrappedError struct {
+	inner error
+}
+
+func (we wrappedError) Error() string {
+	return "wrapped error: " + we.inner.Error()
+}
+
+func (we wrappedError) Unwrap() error {
+	return we.inner
+}
+
+var errOriginal = errors.New("original error")
+
+func TestSourceFuncErrorWrapping(t *testing.T) {
+	t.Parallel()
+
+	// Create a SourceFunc with a srcFunc that wraps its error.
+	src := stream.SourceFunc(func(_ context.Context) (*int, error) {
+		return nil, wrappedError{inner: errOriginal}
+	}, nil)
+
+	// Call Pull and assert behavior
+	item, err := src.Pull(context.Background())
+
+	// Ensure no item is returned
+	if item != nil {
+		t.Fatalf("expected item to be nil, got %v", item)
+	}
+
+	// Ensure an error is returned
+	if err == nil {
+		t.Fatal("expected an error, got nil")
+	}
+
+	// Ensure the error is of type wrappedError
+	var we wrappedError
+	if !errors.As(err, &we) {
+		t.Fatalf("expected error to be of type wrappedError, got %T", err)
+	}
+
+	// Ensure the error wraps the original error
+	if !errors.Is(err, errOriginal) {
+		t.Fatalf("expected error to wrap errOriginal, but it did not")
 	}
 }
 
