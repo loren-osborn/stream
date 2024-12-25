@@ -166,14 +166,12 @@ const (
 	PreCancelContext         ErrorTestBehaviorFlags = 1 << iota // Cancel context before starting test
 	ExpectCloseInsteadOfPull                                    // Expect Close() to be called instead of Pull()
 	ExpectPullCall                                              // Expect Pull() to be called
-	CancelWithinPullCall                                        // Context should cancel (Pull()
-	// should return cancelation error).
-	DeferCancelFromPullCall // Pull() will return dummy data
-	// with nil error, but cancel context in defer.
+	// CancelWithinPullCall indicates context should cancel (Pull() should return cancelation error).
+	CancelWithinPullCall
+	DeferCancelFromPullCall   // Pull() will return dummy data with nil error, but cancel context in defer.
 	ExpectCloseAfterPull      // Expect Close to be called after return from Pull()
 	ExpectPredicateCall       // Expect Predicate to be called (if there is one)
-	CancelWithinPredicateCall // Predicate will cancel context
-	// (by calling predicateLambda).
+	CancelWithinPredicateCall // Predicate will cancel context (by calling predicateLambda).
 	ExpectCloseAfterPredicate // Expect Close() to be called after predicate
 )
 
@@ -293,6 +291,16 @@ func getErrorTestCases(t *testing.T) []errorTestCase {
 					if closeCallCount != expectedCloseCalls {
 						t.Errorf("Close() called %d times when %d expected", closeCallCount, expectedCloseCalls)
 					}
+
+					// Ensure we actually called Pull() if ExpectPullCall is set.
+					if flags&ExpectPullCall != 0 && pullCallCount == 0 {
+						t.Errorf("Expected Pull() call but none was made")
+					}
+
+					// Ensure we actually called Predicate if ExpectPredicateCall is set.
+					if flags&ExpectPredicateCall != 0 && predicateCallCount == 0 {
+						t.Errorf("Expected predicate call but none was made")
+					}
 				},
 			}
 		}
@@ -342,14 +350,14 @@ func getErrorTestCases(t *testing.T) []errorTestCase {
 		},
 		{
 			name:              "EOF",
-			lambdaEmitter:     lambdaEmitterFactory(ExpectPullCall|ExpectPredicateCall, io.EOF),
+			lambdaEmitter:     lambdaEmitterFactory(ExpectPullCall, io.EOF),
 			expectedError:     io.EOF,
 			expectedSinkError: false,
 			needPredicate:     false,
 		},
 		{
 			name:              "ErrorHandling",
-			lambdaEmitter:     lambdaEmitterFactory(ExpectPullCall|ExpectPredicateCall, ErrTestOriginalError),
+			lambdaEmitter:     lambdaEmitterFactory(ExpectPullCall, ErrTestOriginalError),
 			expectedError:     fmt.Errorf("data pull failed: %w", ErrTestOriginalError),
 			expectedSinkError: true,
 			needPredicate:     false,
@@ -358,9 +366,9 @@ func getErrorTestCases(t *testing.T) []errorTestCase {
 }
 
 type sinkOutputTestCase[T any] struct {
-	name      string
+	name string
 	// returning any, because we only care about nil-ness
-	generator func(context.Context, stream.Source[T], func()) (any, error)
+	generator    func(context.Context, stream.Source[T], func()) (any, error)
 	hasPredicate bool
 }
 
