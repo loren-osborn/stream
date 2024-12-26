@@ -207,7 +207,7 @@ func TestRingBuffer_Range_EarlyExit(t *testing.T) {
 	}
 }
 
-// nolint: funlen // *FIXME*
+//nolint: funlen // *FIXME*
 func TestRingBuffer_ConcurrentAccess(t *testing.T) {
 	t.Parallel()
 

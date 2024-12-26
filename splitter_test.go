@@ -76,7 +76,7 @@ type SpoolerTestCase[T any] struct {
 	PullCalls []PullCallType[T] // Each call to Spooler.Pull()
 }
 
-// nolint: funlen // dataset only
+//nolint: funlen // dataset only
 func getTestCasesSpoolerNormalOps() []SpoolerTestCase[int] {
 	return []SpoolerTestCase[int]{
 		{
