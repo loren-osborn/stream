@@ -479,7 +479,7 @@ func getTransformerIntOutputTestCase() []transformerOutputTestCase[int] {
 				filter := stream.NewFilter(src, func(n int) bool {
 					inPredicate()
 
-					return n%2 == 0
+					return n%2 != 0
 				})
 
 				return func() (*int, error) {
@@ -498,6 +498,21 @@ func getTransformerIntOutputTestCase() []transformerOutputTestCase[int] {
 				}
 			},
 			hasPredicate: false,
+		},
+		{
+			name: "TakerWhile",
+			generator: func(src stream.Source[int], ctx context.Context, inPredicate func()) func() (*int, error) {
+				taker := stream.NewTakeWhile(src, func(val int) bool {
+					inPredicate()
+
+					return val < 3
+				})
+
+				return func() (*int, error) {
+					return taker.Pull(ctx)
+				}
+			},
+			hasPredicate: true,
 		},
 		{
 			name: "ReduceTransformer",

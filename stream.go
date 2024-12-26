@@ -329,7 +329,15 @@ func (ft *Filter[T]) Pull(ctx context.Context) (*T, error) {
 			}
 		}
 
-		if ft.predicate(*next) {
+		skipElement := !(ft.predicate(*next))
+
+		if ctxErr = ctx.Err(); ctxErr != nil {
+			ft.Close()
+
+			return nil, fmt.Errorf("operation canceled: %w", ctxErr)
+		}
+
+		if !skipElement {
 			return next, nil
 		}
 	}
@@ -347,13 +355,29 @@ func (ft *Filter[T]) Close() {
 
 // Taker limits the number of elements returned from a Source.
 type Taker[T any] struct {
-	input Source[T]
-	left  int
+	input     Source[T]
+	predicate func(T) bool
 }
 
 // NewTaker returns a new Taker wrapping the given Source.
 func NewTaker[T any](input Source[T], elCount int) *Taker[T] {
-	return &Taker[T]{input: input, left: elCount}
+	left := elCount
+	pred := func(_ T) bool {
+		if left < 1 {
+			return false
+		}
+
+		left--
+
+		return true
+	}
+
+	return &Taker[T]{input: input, predicate: pred}
+}
+
+// NewTakeWhile returns a new TakeWhile wrapping the given Source.
+func NewTakeWhile[T any](input Source[T], pred func(T) bool) *Taker[T] {
+	return &Taker[T]{input: input, predicate: pred}
 }
 
 // Pull retrieves the next element, decrementing the remaining count.
@@ -384,13 +408,19 @@ func (tt *Taker[T]) Pull(ctx context.Context) (*T, error) {
 		}
 	}
 
-	if tt.left <= 0 {
+	keepGoing := tt.predicate(*next)
+
+	if ctxErr = ctx.Err(); ctxErr != nil {
+		tt.Close()
+
+		return nil, fmt.Errorf("operation canceled: %w", ctxErr)
+	}
+
+	if !keepGoing {
 		tt.Close()
 
 		return nil, io.EOF
 	}
-
-	tt.left--
 
 	return next, nil
 }
