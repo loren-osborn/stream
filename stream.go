@@ -434,6 +434,29 @@ func (tt *Taker[T]) Close() {
 	tt.input = nil
 }
 
+// NewDropWhile returns a Filter that skips elements until pred(val) is false.
+func NewDropWhile[T any](input Source[T], pred func(T) bool) *Filter[T] {
+	predFailed := false
+
+	return &Filter[T]{
+		input: input,
+		predicate: func(val T) bool {
+			if predFailed {
+				return true
+			}
+
+			predValue := pred(val)
+			if !predValue {
+				predFailed = true
+
+				return true
+			}
+
+			return false
+		},
+	}
+}
+
 // NewDropper returns a Filter that skips the first elCount elements.
 func NewDropper[T any](input Source[T], elCount int) *Filter[T] {
 	skip := elCount

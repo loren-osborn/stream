@@ -489,6 +489,32 @@ func getTransformerIntOutputTestCase() []transformerOutputTestCase[int] {
 			hasPredicate: true,
 		},
 		{
+			name: "Dropper",
+			generator: func(src stream.Source[int], ctx context.Context, _ func()) func() (*int, error) {
+				taker := stream.NewDropper(src, 3)
+
+				return func() (*int, error) {
+					return taker.Pull(ctx)
+				}
+			},
+			hasPredicate: false,
+		},
+		{
+			name: "DropWhile",
+			generator: func(src stream.Source[int], ctx context.Context, inPredicate func()) func() (*int, error) {
+				taker := stream.NewDropWhile(src, func(val int) bool {
+					inPredicate()
+
+					return val < 3
+				})
+
+				return func() (*int, error) {
+					return taker.Pull(ctx)
+				}
+			},
+			hasPredicate: true,
+		},
+		{
 			name: "Taker",
 			generator: func(src stream.Source[int], ctx context.Context, _ func()) func() (*int, error) {
 				taker := stream.NewTaker(src, 3)
