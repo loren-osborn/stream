@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"reflect"
+	"strings"
 	"testing"
 
 	//nolint:depguard // package under test.
@@ -1028,6 +1029,115 @@ func TestSourceFuncErrorWrapping(t *testing.T) {
 	if !errors.Is(err, errOriginal) {
 		t.Fatalf("expected error to wrap errOriginal, but it did not")
 	}
+}
+
+//nolint:funlen,gocognit // **FIXME**
+func TestNewTakeAndDropWhile(t *testing.T) {
+	t.Parallel()
+
+	testables := []struct {
+		name      string
+		underTest func(stream.Source[int], func(int) bool) stream.Source[int]
+	}{
+		{
+			name: "TakeWhile",
+			underTest: func(src stream.Source[int], pred func(int) bool) stream.Source[int] {
+				return stream.NewTakeWhile(src, pred)
+			},
+		},
+		{
+			name: "DropWhile",
+			underTest: func(src stream.Source[int], pred func(int) bool) stream.Source[int] {
+				return stream.NewDropWhile(src, pred)
+			},
+		},
+	}
+
+	tests := []struct {
+		name      string
+		input     []int
+		predicate func(int) bool
+		expected  [][]int
+	}{
+		{
+			name:      "Basic operation",
+			input:     []int{1, 2, 3, 4, 5},
+			predicate: func(n int) bool { return n < 4 },
+			expected:  [][]int{{1, 2, 3}, {4, 5}},
+		},
+		{
+			name:      "All pass",
+			input:     []int{1, 2, 3},
+			predicate: func(_ int) bool { return true },
+			expected:  [][]int{{1, 2, 3}, {}},
+		},
+		{
+			name:      "None pass",
+			input:     []int{1, 2, 3},
+			predicate: func(_ int) bool { return false },
+			expected:  [][]int{{}, {1, 2, 3}},
+		},
+	}
+
+	for testablesIdxLoop, testablesCaseLoop := range testables {
+		for _, tcLoop := range tests {
+			// Shadow copies:
+			testablesIdx := testablesIdxLoop
+			testablesCase := testablesCaseLoop
+			testcCase := tcLoop
+
+			t.Run(strings.Join([]string{testablesCase.name, testcCase.name}, " "), func(t *testing.T) {
+				t.Parallel()
+
+				// Create a source and the SUT transformer
+				source := stream.NewSliceSource(testcCase.input)
+				sysUnderTest := testablesCase.underTest(source, testcCase.predicate)
+
+				ctx := context.Background()
+
+				var result []int
+
+				for {
+					item, err := sysUnderTest.Pull(ctx)
+					if err != nil {
+						if errors.Is(err, io.EOF) {
+							break
+						}
+
+						t.Fatalf("unexpected error: %v", err)
+					}
+
+					if item != nil {
+						result = append(result, *item)
+					}
+				}
+
+				if !equalSlices(result, testcCase.expected[testablesIdx]) {
+					t.Fatalf("expected %v, got %v", testcCase.expected[testablesIdx], result)
+				}
+
+				item, err := sysUnderTest.Pull(ctx)
+				if item != nil || !errors.Is(err, io.EOF) {
+					t.Fatalf("expected EOF, got item=%v, err=%v", item, err)
+				}
+			})
+		}
+	}
+}
+
+// Helper function to compare two slices for equality.
+func equalSlices[T comparable](left, right []T) bool {
+	if len(left) != len(right) {
+		return false
+	}
+
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+
+	return true
 }
 
 // ExampleReducer demonstrates a complete pipeline of producers, transformers, and consumers.
