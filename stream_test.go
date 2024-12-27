@@ -179,7 +179,7 @@ const (
 type emittedLambdas struct {
 	ctxGen          func() context.Context
 	pullLambda      func(context.Context) (*int, error)
-	closeLambda     func()
+	closeLambda     func() error
 	predicateLambda func()
 	finalLambda     func()
 }
@@ -262,7 +262,7 @@ func getErrorTestCases(t *testing.T) []errorTestCase {
 
 					return nil, pullErr
 				},
-				closeLambda: func() {
+				closeLambda: func() error {
 					if flags&(ExpectCloseInsteadOfPull|ExpectCloseAfterPull|ExpectCloseAfterPredicate) == 0 {
 						t.Errorf("In Close() call when not expected")
 					}
@@ -272,6 +272,8 @@ func getErrorTestCases(t *testing.T) []errorTestCase {
 					if closeCallCount > 1 {
 						t.Errorf("Close() unexpectedly called %d times (more than one).", closeCallCount)
 					}
+
+					return nil
 				},
 				predicateLambda: func() {
 					predicateCallCount++
@@ -637,8 +639,10 @@ func TestSourceFuncCancelCtx(t *testing.T) {
 
 			return &outVal, nil
 		},
-		func() {
+		func() error {
 			sourceClosed = true
+
+			return nil
 		},
 	)
 
@@ -662,7 +666,7 @@ func TestSourceFuncCancelCtx(t *testing.T) {
 // rawSourceFunc is a Source implementation backed by raw function calls.
 type rawSourceFunc[T any] struct {
 	srcFunc   func(context.Context) (*T, error)
-	closeFunc func()
+	closeFunc func() error
 }
 
 // Pull calls the underlying source function to retrieve the next element.
@@ -672,8 +676,8 @@ func (rsf *rawSourceFunc[T]) Pull(ctx context.Context) (*T, error) {
 }
 
 // Close releases the resources associated with the source function.
-func (rsf *rawSourceFunc[T]) Close() {
-	rsf.closeFunc()
+func (rsf *rawSourceFunc[T]) Close() error {
+	return rsf.closeFunc()
 }
 
 // HelperCancelCtxOnPull tests cancellation of a context while something from a source.
@@ -702,8 +706,10 @@ func HelperCancelCtxOnPull[TOut any](
 
 			return &outVal, nil
 		},
-		closeFunc: func() {
+		closeFunc: func() error {
 			sourceClosed = true
+
+			return nil
 		},
 	}
 
@@ -934,13 +940,15 @@ func TestTakerCloseOnEOF(t *testing.T) {
 
 			return &item, nil
 		},
-		closeFunc: func() {
+		closeFunc: func() error {
 			if mockData.closed {
 				panic("Close called multiple times")
 			}
 
 			mockData.closed = true
 			mockData.closeCalls++
+
+			return nil
 		},
 	}
 

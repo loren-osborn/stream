@@ -60,7 +60,9 @@ func (s *Spooler[T]) Pull(ctx context.Context) (*T, error) {
 		}
 
 		if s.input == nil {
-			s.Close()
+			if err := s.Close(); err != nil {
+				return nil, fmt.Errorf("error closing source: %w", errors.Join(err, io.EOF))
+			}
 
 			return nil, io.EOF
 		}
@@ -72,12 +74,16 @@ func (s *Spooler[T]) Pull(ctx context.Context) (*T, error) {
 	if (ctxErr != nil) || (err != nil) {
 		switch {
 		case ctxErr != nil:
-			s.Close()
+			if err := s.Close(); err != nil {
+				return nil, fmt.Errorf("error closing source while canceling: %w", errors.Join(err, ctxErr))
+			}
 
 			return nil, fmt.Errorf("operation canceled: %w", ctxErr)
 		case errors.Is(err, io.EOF):
 			s.input = nil // Source should have already closed itself
-			s.Close()
+			if err := s.Close(); err != nil {
+				return nil, fmt.Errorf("error closing source: %w", errors.Join(err, io.EOF))
+			}
 
 			return nil, io.EOF
 		default:
@@ -114,22 +120,36 @@ func (s *Spooler[T]) Stuff(items []T) {
 //     consumption of buffered elements.
 //   - It is intended for internal use and should not be called directly by
 //     external consumers.
-func (s *Spooler[T]) closeInput() {
+func (s *Spooler[T]) closeInput() error {
+	var err error
+
 	if s.input != nil {
-		s.input.Close()
+		err = s.input.Close()
 	}
 
 	s.input = nil
+
+	if err != nil {
+		return fmt.Errorf("error closing source: %w", err)
+	}
+
+	return nil
 }
 
 // Close signals to the Spooler that it will no longer be used and releases
 // its resources.
 //
 // This method clears the internal buffer and closes the upstream source.
-func (s *Spooler[T]) Close() {
-	s.closeInput()
+func (s *Spooler[T]) Close() error {
+	err := s.closeInput()
 
 	s.buffer = nil
+
+	if err != nil {
+		return fmt.Errorf("error closing source: %w", err)
+	}
+
+	return nil
 }
 
 // NewSpooler creates a new Spooler instance for buffering and sequentially

@@ -95,13 +95,13 @@ import (
 // the source.
 type Source[T any] interface {
 	Pull(ctx context.Context) (*T, error) // Returns the next element.
-	Close()                               // Lets the consumer tell the source that no more data will be Pull()ed.
+	Close() error                         // Lets the consumer tell the source that no more data will be Pull()ed.
 }
 
 // sourceFunc is a Source implementation backed by function calls.
 type sourceFunc[T any] struct {
 	srcFunc   func(context.Context) (*T, error)
-	closeFunc func()
+	closeFunc func() error
 }
 
 // Pull calls the underlying source function to retrieve the next element.
@@ -120,11 +120,15 @@ func (sf *sourceFunc[T]) Pull(ctx context.Context) (*T, error) {
 	if (err != nil) || (ctxErr != nil) {
 		switch {
 		case ctxErr != nil:
-			sf.Close()
+			if err := sf.Close(); err != nil {
+				return nil, fmt.Errorf("error closing source while canceling: %w", errors.Join(err, ctxErr))
+			}
 
 			return nil, fmt.Errorf("operation canceled: %w", ctxErr)
 		case errors.Is(err, io.EOF):
-			sf.Close()
+			if err := sf.Close(); err != nil {
+				return nil, fmt.Errorf("error closing source: %w", errors.Join(err, io.EOF))
+			}
 
 			return nil, io.EOF
 		default:
@@ -137,20 +141,28 @@ func (sf *sourceFunc[T]) Pull(ctx context.Context) (*T, error) {
 }
 
 // Close releases the resources associated with the source function.
-func (sf *sourceFunc[T]) Close() {
+func (sf *sourceFunc[T]) Close() error {
+	var err error
+
 	if sf.closeFunc != nil {
-		sf.closeFunc()
+		err = sf.closeFunc()
 	}
 
 	sf.srcFunc = nil
 	sf.closeFunc = nil
+
+	if err != nil {
+		return fmt.Errorf("error closing source: %w", err)
+	}
+
+	return nil
 }
 
 // SourceFunc creates a Source backed by function calls.
 //
 // srcFunc is called to produce elements, and closeFunc is called when
 // the source is closed.
-func SourceFunc[T any](srcFunc func(context.Context) (*T, error), closeFunc func()) Source[T] {
+func SourceFunc[T any](srcFunc func(context.Context) (*T, error), closeFunc func() error) Source[T] {
 	return &sourceFunc[T]{
 		srcFunc:   srcFunc,
 		closeFunc: closeFunc,
@@ -169,8 +181,18 @@ func NewSliceSource[T any](data []T) *SliceSource[T] {
 
 // Pull retrieves the next element from the slice or io.EOF if exhausted.
 func (sp *SliceSource[T]) Pull(ctx context.Context) (*T, error) {
-	if (ctx.Err() != nil) || (len(sp.data) < 1) {
-		sp.Close() // Free unused slice
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		if err := sp.Close(); err != nil {
+			return nil, fmt.Errorf("error closing source while canceling: %w", errors.Join(err, ctxErr))
+		}
+
+		return nil, fmt.Errorf("operation canceled: %w", ctxErr)
+	}
+
+	if len(sp.data) < 1 {
+		if err := sp.Close(); err != nil {
+			return nil, fmt.Errorf("error closing source: %w", errors.Join(err, io.EOF))
+		}
 
 		return nil, io.EOF
 	}
@@ -182,8 +204,10 @@ func (sp *SliceSource[T]) Pull(ctx context.Context) (*T, error) {
 }
 
 // Close releases the slice data.
-func (sp *SliceSource[T]) Close() {
+func (sp *SliceSource[T]) Close() error {
 	sp.data = nil
+
+	return nil
 }
 
 // SliceSink collects elements from a Source into a slice.
@@ -215,7 +239,9 @@ func (ss *SliceSink[T]) Append(ctx context.Context, input Source[T]) (*[]T, erro
 		if (err != nil) || (ctxErr != nil) {
 			switch {
 			case ctxErr != nil:
-				input.Close()
+				if err := input.Close(); err != nil {
+					return nil, fmt.Errorf("error closing source while canceling: %w", errors.Join(err, ctxErr))
+				}
 
 				return nil, fmt.Errorf("operation canceled: %w", ctxErr)
 			case errors.Is(err, io.EOF):
@@ -255,12 +281,16 @@ func (mt *Mapper[TIn, TOut]) Pull(ctx context.Context) (*TOut, error) {
 	if (err != nil) || (ctxErr != nil) {
 		switch {
 		case ctxErr != nil:
-			mt.Close()
+			if err := mt.Close(); err != nil {
+				return nil, fmt.Errorf("error closing source while canceling: %w", errors.Join(err, ctxErr))
+			}
 
 			return nil, fmt.Errorf("operation canceled: %w", ctxErr)
 		case errors.Is(err, io.EOF):
 			mt.input = nil // Source should have already closed itself
-			mt.Close()
+			if err := mt.Close(); err != nil {
+				return nil, fmt.Errorf("error closing source: %w", errors.Join(err, io.EOF))
+			}
 
 			return nil, io.EOF
 		default:
@@ -271,7 +301,9 @@ func (mt *Mapper[TIn, TOut]) Pull(ctx context.Context) (*TOut, error) {
 	nextOut := mt.mapFn(*nextIn)
 
 	if ctxErr = ctx.Err(); ctxErr != nil {
-		mt.Close()
+		if err := mt.Close(); err != nil {
+			return nil, fmt.Errorf("error closing source while canceling: %w", errors.Join(err, ctxErr))
+		}
 
 		return nil, fmt.Errorf("operation canceled: %w", ctxErr)
 	}
@@ -280,13 +312,21 @@ func (mt *Mapper[TIn, TOut]) Pull(ctx context.Context) (*TOut, error) {
 }
 
 // Close releases resources associated with the Mapper.
-func (mt *Mapper[TIn, TOut]) Close() {
+func (mt *Mapper[TIn, TOut]) Close() error {
+	var err error
+
 	if mt.input != nil {
-		mt.input.Close()
+		err = mt.input.Close()
 	}
 
 	mt.input = nil
 	mt.mapFn = nil
+
+	if err != nil {
+		return fmt.Errorf("error closing source: %w", err)
+	}
+
+	return nil
 }
 
 // Filter selects elements from a Source based on a predicate function.
@@ -301,6 +341,8 @@ func NewFilter[T any](input Source[T], predicate func(T) bool) *Filter[T] {
 }
 
 // Pull retrieves the next element from the input Source that satisfies the predicate.
+//
+//nolint:cyclop // **FIXME**
 func (ft *Filter[T]) Pull(ctx context.Context) (*T, error) {
 	for {
 		var next *T
@@ -316,12 +358,16 @@ func (ft *Filter[T]) Pull(ctx context.Context) (*T, error) {
 		if (ctxErr != nil) || (err != nil) {
 			switch {
 			case ctxErr != nil:
-				ft.Close()
+				if err := ft.Close(); err != nil {
+					return nil, fmt.Errorf("error closing source while canceling: %w", errors.Join(err, ctxErr))
+				}
 
 				return nil, fmt.Errorf("operation canceled: %w", ctxErr)
 			case errors.Is(err, io.EOF):
 				ft.input = nil // Source should have already closed itself
-				ft.Close()
+				if err := ft.Close(); err != nil {
+					return nil, fmt.Errorf("error closing source: %w", errors.Join(err, io.EOF))
+				}
 
 				return nil, io.EOF
 			default:
@@ -332,7 +378,9 @@ func (ft *Filter[T]) Pull(ctx context.Context) (*T, error) {
 		skipElement := !(ft.predicate(*next))
 
 		if ctxErr = ctx.Err(); ctxErr != nil {
-			ft.Close()
+			if err := ft.Close(); err != nil {
+				return nil, fmt.Errorf("error closing source while canceling: %w", errors.Join(err, ctxErr))
+			}
 
 			return nil, fmt.Errorf("operation canceled: %w", ctxErr)
 		}
@@ -344,13 +392,21 @@ func (ft *Filter[T]) Pull(ctx context.Context) (*T, error) {
 }
 
 // Close releases resources associated with the Filter.
-func (ft *Filter[T]) Close() {
+func (ft *Filter[T]) Close() error {
+	var err error
+
 	if ft.input != nil {
-		ft.input.Close()
+		err = ft.input.Close()
 	}
 
 	ft.input = nil
 	ft.predicate = nil
+
+	if err != nil {
+		return fmt.Errorf("error closing source: %w", err)
+	}
+
+	return nil
 }
 
 // Taker limits the number of elements returned from a Source.
@@ -381,6 +437,8 @@ func NewTakeWhile[T any](input Source[T], pred func(T) bool) *Taker[T] {
 }
 
 // Pull retrieves the next element, decrementing the remaining count.
+//
+//nolint:cyclop // **FIXME**
 func (tt *Taker[T]) Pull(ctx context.Context) (*T, error) {
 	var next *T
 
@@ -395,12 +453,16 @@ func (tt *Taker[T]) Pull(ctx context.Context) (*T, error) {
 	if (ctxErr != nil) || (err != nil) {
 		switch {
 		case ctxErr != nil:
-			tt.Close()
+			if err := tt.Close(); err != nil {
+				return nil, fmt.Errorf("error closing source while canceling: %w", errors.Join(err, ctxErr))
+			}
 
 			return nil, fmt.Errorf("operation canceled: %w", ctxErr)
 		case errors.Is(err, io.EOF):
 			tt.input = nil // Source should have already closed itself
-			tt.Close()
+			if err := tt.Close(); err != nil {
+				return nil, fmt.Errorf("error closing source: %w", errors.Join(err, io.EOF))
+			}
 
 			return nil, io.EOF
 		default:
@@ -411,13 +473,17 @@ func (tt *Taker[T]) Pull(ctx context.Context) (*T, error) {
 	keepGoing := tt.predicate(*next)
 
 	if ctxErr = ctx.Err(); ctxErr != nil {
-		tt.Close()
+		if err := tt.Close(); err != nil {
+			return nil, fmt.Errorf("error closing source while canceling: %w", errors.Join(err, ctxErr))
+		}
 
 		return nil, fmt.Errorf("operation canceled: %w", ctxErr)
 	}
 
 	if !keepGoing {
-		tt.Close()
+		if err := tt.Close(); err != nil {
+			return nil, fmt.Errorf("error closing source: %w", errors.Join(err, io.EOF))
+		}
 
 		return nil, io.EOF
 	}
@@ -426,12 +492,20 @@ func (tt *Taker[T]) Pull(ctx context.Context) (*T, error) {
 }
 
 // Close releases resources associated with the Taker.
-func (tt *Taker[T]) Close() {
+func (tt *Taker[T]) Close() error {
+	var err error
+
 	if tt.input != nil {
-		tt.input.Close()
+		err = tt.input.Close()
 	}
 
 	tt.input = nil
+
+	if err != nil {
+		return fmt.Errorf("error closing source: %w", err)
+	}
+
+	return nil
 }
 
 // NewDropWhile returns a Filter that skips elements until pred(val) is false.
@@ -518,7 +592,9 @@ func (rt *ReduceTransformer[TIn, TOut]) Pull(ctx context.Context) (*TOut, error)
 	}
 
 	if rt.input == nil {
-		rt.Close()
+		if err := rt.Close(); err != nil {
+			return nil, fmt.Errorf("error closing source: %w", errors.Join(err, io.EOF))
+		}
 
 		return nil, io.EOF
 	}
@@ -535,7 +611,9 @@ func (rt *ReduceTransformer[TIn, TOut]) Pull(ctx context.Context) (*TOut, error)
 	if (ctxErr != nil) || (err != nil) {
 		switch {
 		case ctxErr != nil:
-			rt.Close()
+			if err := rt.Close(); err != nil {
+				return nil, fmt.Errorf("error closing source while canceling: %w", errors.Join(err, ctxErr))
+			}
 
 			return nil, fmt.Errorf("operation canceled: %w", ctxErr)
 		case errors.Is(err, io.EOF):
@@ -555,22 +633,36 @@ func (rt *ReduceTransformer[TIn, TOut]) Pull(ctx context.Context) (*TOut, error)
 }
 
 // closeInput signals the input source to stop processing and retains any buffered elements.
-func (rt *ReduceTransformer[TIn, TOut]) closeInput() {
+func (rt *ReduceTransformer[TIn, TOut]) closeInput() error {
+	var err error
+
 	if rt.input != nil {
-		rt.input.Close()
+		err = rt.input.Close()
 	}
 
 	rt.input = nil
+
+	if err != nil {
+		return fmt.Errorf("error closing source: %w", err)
+	}
+
+	return nil
 }
 
 // Close releases all resources held by the ReduceTransformer and stops further processing.
 //
 // Any buffered elements are discarded, and the reducer function is cleared to prevent future use.
-func (rt *ReduceTransformer[TIn, TOut]) Close() {
-	rt.closeInput()
+func (rt *ReduceTransformer[TIn, TOut]) Close() error {
+	err := rt.closeInput()
 	rt.buffer = nil
 	rt.accumulator = nil
 	rt.reducer = nil
+
+	if err != nil {
+		return fmt.Errorf("error closing source: %w", err)
+	}
+
+	return nil
 }
 
 // Reducer processes an entire input source and reduces it to a single output value.
@@ -616,7 +708,9 @@ func (rc *Reducer[TIn, TOut]) Reduce(ctx context.Context, input Source[TIn]) (TO
 		if (ctxErr != nil) || (err != nil) {
 			switch {
 			case ctxErr != nil:
-				input.Close()
+				if err := input.Close(); err != nil {
+					return *new(TOut), fmt.Errorf("error closing source while canceling: %w", errors.Join(err, ctxErr))
+				}
 
 				return *new(TOut), fmt.Errorf("operation canceled: %w", ctxErr)
 			case errors.Is(err, io.EOF):
