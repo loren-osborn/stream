@@ -583,9 +583,8 @@ func (rt *ReduceTransformer[TIn, TOut]) Pull(ctx context.Context) (*TOut, error)
 	}
 
 	if rt.input == nil {
-		if err := rt.Close(); err != nil {
-			return nil, fmt.Errorf("error closing source: %w", errors.Join(err, io.EOF))
-		}
+		closeErr := rt.Close()
+		assertf(closeErr == nil, "Close() with nil rt.input always returns nil")
 
 		return nil, io.EOF
 	}

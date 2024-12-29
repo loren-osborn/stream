@@ -1137,23 +1137,17 @@ var errTestCloseError = errors.New("test close error")
 
 // TestSourceCloseError validates error propagation from Close() in SourceFunc.
 //
-//nolint:funlen,maintidx // **FIXME**
+//nolint:funlen // **FIXME**
 func TestSourceCloseError(t *testing.T) {
 	t.Parallel()
 
 	expectedError := errTestCloseError
 
-	type PredicateDisposition int
-
-	HasNoPredicate := PredicateDisposition(0)
-	HasBooleanPredicate := PredicateDisposition(1)
-	HasNonBooleanPredicate := PredicateDisposition(2)
-
 	testSources := []struct {
 		name             string
 		srcGen           func(func(), func(), bool, *int, error) stream.Source[int]
 		eofImpliesClosed bool
-		hasPredicate     PredicateDisposition
+		hasPredicate     bool
 	}{
 		{
 			name: "SourceFunc",
@@ -1170,7 +1164,7 @@ func TestSourceCloseError(t *testing.T) {
 				)
 			},
 			eofImpliesClosed: false,
-			hasPredicate:     HasNoPredicate,
+			hasPredicate:     false,
 		},
 		{
 			name: "Mapper",
@@ -1193,7 +1187,7 @@ func TestSourceCloseError(t *testing.T) {
 				})
 			},
 			eofImpliesClosed: true,
-			hasPredicate:     HasNonBooleanPredicate,
+			hasPredicate:     true,
 		},
 		{
 			name: "Filter",
@@ -1216,7 +1210,7 @@ func TestSourceCloseError(t *testing.T) {
 				})
 			},
 			eofImpliesClosed: true,
-			hasPredicate:     HasBooleanPredicate,
+			hasPredicate:     true,
 		},
 		{
 			name: "TakeWhile",
@@ -1239,7 +1233,7 @@ func TestSourceCloseError(t *testing.T) {
 				})
 			},
 			eofImpliesClosed: true,
-			hasPredicate:     HasBooleanPredicate,
+			hasPredicate:     true,
 		},
 		{
 			name: "ReduceTransformer",
@@ -1262,7 +1256,7 @@ func TestSourceCloseError(t *testing.T) {
 				})
 			},
 			eofImpliesClosed: true,
-			hasPredicate:     HasNonBooleanPredicate,
+			hasPredicate:     true,
 		},
 		{
 			name: "Spool",
@@ -1281,7 +1275,7 @@ func TestSourceCloseError(t *testing.T) {
 				return stream.NewSpooler(mockSrc)
 			},
 			eofImpliesClosed: true,
-			hasPredicate:     HasNoPredicate,
+			hasPredicate:     false,
 		},
 	}
 
@@ -1357,28 +1351,7 @@ func TestSourceCloseError(t *testing.T) {
 			assertErrorString(t, err, expectedWrappedErr)
 		})
 
-		// if testSrc.hasPredicate == HasBooleanPredicate {
-		// 	t.Run((testSrc.name + ": Error closing after false predicate"), func(t *testing.T) {
-		// 		t.Parallel()
-
-		// 		source := testSrc.srcGen(func() {}, func() {}, false, nil, io.EOF)
-
-		// 		// Pull should trigger Close() since it returns EOF
-		// 		val, err := source.Pull(context.Background())
-		// 		if val != nil {
-		// 			t.Errorf("expected nil value, got %v", val)
-		// 		}
-
-		// 		// Error should be wrapped
-		// 		expectedWrappedErr := fmt.Errorf(
-		// 			"error closing source: %w",
-		// 			errors.Join(fmt.Errorf("error closing source: %w", expectedError), io.EOF))
-
-		// 		assertErrorString(t, err, expectedWrappedErr)
-		// 	})
-		// }
-
-		if testSrc.hasPredicate != HasNoPredicate {
+		if testSrc.hasPredicate {
 			t.Run((testSrc.name + ": Error closing after canceled context in predicate"), func(t *testing.T) {
 				t.Parallel()
 
