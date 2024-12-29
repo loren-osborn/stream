@@ -1145,13 +1145,13 @@ func TestSourceCloseError(t *testing.T) {
 
 	testSources := []struct {
 		name             string
-		srcGen           func(func(), func(), bool, *int, error) stream.Source[int]
+		srcGen           func(func(), func(), *int, error) stream.Source[int]
 		eofImpliesClosed bool
 		hasPredicate     bool
 	}{
 		{
 			name: "SourceFunc",
-			srcGen: func(fn func(), _ func(), _ bool, ip *int, err error) stream.Source[int] {
+			srcGen: func(fn func(), _ func(), ip *int, err error) stream.Source[int] {
 				return stream.SourceFunc(
 					func(context.Context) (*int, error) {
 						fn()
@@ -1168,7 +1168,7 @@ func TestSourceCloseError(t *testing.T) {
 		},
 		{
 			name: "Mapper",
-			srcGen: func(fn1 func(), fn2 func(), _ bool, ip *int, err error) stream.Source[int] {
+			srcGen: func(fn1 func(), fn2 func(), ip *int, err error) stream.Source[int] {
 				mockSrc := &rawSourceFunc[int]{
 					srcFunc: func(context.Context) (*int, error) {
 						fn1()
@@ -1191,7 +1191,7 @@ func TestSourceCloseError(t *testing.T) {
 		},
 		{
 			name: "Filter",
-			srcGen: func(fn1 func(), fn2 func(), predResult bool, ip *int, err error) stream.Source[int] {
+			srcGen: func(fn1 func(), fn2 func(), ip *int, err error) stream.Source[int] {
 				mockSrc := &rawSourceFunc[int]{
 					srcFunc: func(context.Context) (*int, error) {
 						fn1()
@@ -1206,7 +1206,7 @@ func TestSourceCloseError(t *testing.T) {
 				return stream.NewFilter(mockSrc, func(_ int) bool {
 					fn2()
 
-					return predResult
+					return true
 				})
 			},
 			eofImpliesClosed: true,
@@ -1214,7 +1214,7 @@ func TestSourceCloseError(t *testing.T) {
 		},
 		{
 			name: "TakeWhile",
-			srcGen: func(fn1 func(), fn2 func(), predResult bool, ip *int, err error) stream.Source[int] {
+			srcGen: func(fn1 func(), fn2 func(), ip *int, err error) stream.Source[int] {
 				mockSrc := &rawSourceFunc[int]{
 					srcFunc: func(context.Context) (*int, error) {
 						fn1()
@@ -1229,7 +1229,7 @@ func TestSourceCloseError(t *testing.T) {
 				return stream.NewTakeWhile(mockSrc, func(_ int) bool {
 					fn2()
 
-					return predResult
+					return true
 				})
 			},
 			eofImpliesClosed: true,
@@ -1237,7 +1237,7 @@ func TestSourceCloseError(t *testing.T) {
 		},
 		{
 			name: "ReduceTransformer",
-			srcGen: func(fn1 func(), fn2 func(), _ bool, ip *int, err error) stream.Source[int] {
+			srcGen: func(fn1 func(), fn2 func(), ip *int, err error) stream.Source[int] {
 				mockSrc := &rawSourceFunc[int]{
 					srcFunc: func(context.Context) (*int, error) {
 						fn1()
@@ -1260,7 +1260,7 @@ func TestSourceCloseError(t *testing.T) {
 		},
 		{
 			name: "Spool",
-			srcGen: func(fn1 func(), _ func(), _ bool, ip *int, err error) stream.Source[int] {
+			srcGen: func(fn1 func(), _ func(), ip *int, err error) stream.Source[int] {
 				mockSrc := &rawSourceFunc[int]{
 					srcFunc: func(context.Context) (*int, error) {
 						fn1()
@@ -1287,7 +1287,7 @@ func TestSourceCloseError(t *testing.T) {
 		t.Run((testSrc.name + ": Error closing after EOF"), func(t *testing.T) {
 			t.Parallel()
 
-			source := testSrc.srcGen(func() {}, func() {}, true, nil, io.EOF)
+			source := testSrc.srcGen(func() {}, func() {}, nil, io.EOF)
 
 			// Pull should trigger Close() since it returns EOF
 			val, err := source.Pull(context.Background())
@@ -1315,7 +1315,7 @@ func TestSourceCloseError(t *testing.T) {
 
 			// Pull should trigger Close() since it cancels the context
 			cancelableCtx, cancel := context.WithCancel(context.Background())
-			source := testSrc.srcGen(cancel, func() {}, true, nil, io.EOF)
+			source := testSrc.srcGen(cancel, func() {}, nil, io.EOF)
 
 			val, err := source.Pull(cancelableCtx)
 			if val != nil {
@@ -1337,7 +1337,7 @@ func TestSourceCloseError(t *testing.T) {
 
 			cancel()
 
-			source := testSrc.srcGen(func() {}, func() {}, true, nil, io.EOF)
+			source := testSrc.srcGen(func() {}, func() {}, nil, io.EOF)
 
 			val, err := source.Pull(cancelableCtx)
 			if val != nil {
@@ -1357,7 +1357,7 @@ func TestSourceCloseError(t *testing.T) {
 
 				// Pull should trigger Close() since it cancels the context
 				cancelableCtx, cancel := context.WithCancel(context.Background())
-				source := testSrc.srcGen(func() {}, cancel, true, &one, nil)
+				source := testSrc.srcGen(func() {}, cancel, &one, nil)
 
 				val, err := source.Pull(cancelableCtx)
 				if val != nil {
@@ -1375,7 +1375,7 @@ func TestSourceCloseError(t *testing.T) {
 		t.Run((testSrc.name + ": Error directly closing"), func(t *testing.T) {
 			t.Parallel()
 
-			source := testSrc.srcGen(func() {}, func() {}, true, nil, io.EOF)
+			source := testSrc.srcGen(func() {}, func() {}, nil, io.EOF)
 
 			// Call Close directly
 			err := source.Close()
