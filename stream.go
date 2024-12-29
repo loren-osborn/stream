@@ -182,17 +182,15 @@ func NewSliceSource[T any](data []T) *SliceSource[T] {
 // Pull retrieves the next element from the slice or io.EOF if exhausted.
 func (sp *SliceSource[T]) Pull(ctx context.Context) (*T, error) {
 	if ctxErr := ctx.Err(); ctxErr != nil {
-		if err := sp.Close(); err != nil {
-			return nil, fmt.Errorf("error closing source while canceling: %w", errors.Join(err, ctxErr))
-		}
+		err := sp.Close()
+		assertf(err == nil, "Close() always returns nil")
 
 		return nil, fmt.Errorf("operation canceled: %w", ctxErr)
 	}
 
 	if len(sp.data) < 1 {
-		if err := sp.Close(); err != nil {
-			return nil, fmt.Errorf("error closing source: %w", errors.Join(err, io.EOF))
-		}
+		err := sp.Close()
+		assertf(err == nil, "Close() always returns nil")
 
 		return nil, io.EOF
 	}
@@ -288,9 +286,8 @@ func (mt *Mapper[TIn, TOut]) Pull(ctx context.Context) (*TOut, error) {
 			return nil, fmt.Errorf("operation canceled: %w", ctxErr)
 		case errors.Is(err, io.EOF):
 			mt.input = nil // Source should have already closed itself
-			if err := mt.Close(); err != nil {
-				return nil, fmt.Errorf("error closing source: %w", errors.Join(err, io.EOF))
-			}
+			closeErr := mt.Close()
+			assertf(closeErr == nil, "Close() with nil mt.input always returns nil")
 
 			return nil, io.EOF
 		default:
@@ -341,8 +338,6 @@ func NewFilter[T any](input Source[T], predicate func(T) bool) *Filter[T] {
 }
 
 // Pull retrieves the next element from the input Source that satisfies the predicate.
-//
-//nolint:cyclop // **FIXME**
 func (ft *Filter[T]) Pull(ctx context.Context) (*T, error) {
 	for {
 		var next *T
@@ -365,9 +360,8 @@ func (ft *Filter[T]) Pull(ctx context.Context) (*T, error) {
 				return nil, fmt.Errorf("operation canceled: %w", ctxErr)
 			case errors.Is(err, io.EOF):
 				ft.input = nil // Source should have already closed itself
-				if err := ft.Close(); err != nil {
-					return nil, fmt.Errorf("error closing source: %w", errors.Join(err, io.EOF))
-				}
+				closeErr := ft.Close()
+				assertf(closeErr == nil, "Close() with nil ft.input always returns nil")
 
 				return nil, io.EOF
 			default:
@@ -437,8 +431,6 @@ func NewTakeWhile[T any](input Source[T], pred func(T) bool) *Taker[T] {
 }
 
 // Pull retrieves the next element, decrementing the remaining count.
-//
-//nolint:cyclop // **FIXME**
 func (tt *Taker[T]) Pull(ctx context.Context) (*T, error) {
 	var next *T
 
@@ -460,9 +452,8 @@ func (tt *Taker[T]) Pull(ctx context.Context) (*T, error) {
 			return nil, fmt.Errorf("operation canceled: %w", ctxErr)
 		case errors.Is(err, io.EOF):
 			tt.input = nil // Source should have already closed itself
-			if err := tt.Close(); err != nil {
-				return nil, fmt.Errorf("error closing source: %w", errors.Join(err, io.EOF))
-			}
+			closeErr := tt.Close()
+			assertf(closeErr == nil, "Close() with nil tt.input always returns nil")
 
 			return nil, io.EOF
 		default:
@@ -658,11 +649,7 @@ func (rt *ReduceTransformer[TIn, TOut]) Close() error {
 	rt.accumulator = nil
 	rt.reducer = nil
 
-	if err != nil {
-		return fmt.Errorf("error closing source: %w", err)
-	}
-
-	return nil
+	return err
 }
 
 // Reducer processes an entire input source and reduces it to a single output value.

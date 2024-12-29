@@ -60,9 +60,8 @@ func (s *Spooler[T]) Pull(ctx context.Context) (*T, error) {
 		}
 
 		if s.input == nil {
-			if err := s.Close(); err != nil {
-				return nil, fmt.Errorf("error closing source: %w", errors.Join(err, io.EOF))
-			}
+			closeErr := s.Close()
+			assertf(closeErr == nil, "Close() with nil input always returns nil")
 
 			return nil, io.EOF
 		}
@@ -81,9 +80,8 @@ func (s *Spooler[T]) Pull(ctx context.Context) (*T, error) {
 			return nil, fmt.Errorf("operation canceled: %w", ctxErr)
 		case errors.Is(err, io.EOF):
 			s.input = nil // Source should have already closed itself
-			if err := s.Close(); err != nil {
-				return nil, fmt.Errorf("error closing source: %w", errors.Join(err, io.EOF))
-			}
+			closeErr := s.Close()
+			assertf(closeErr == nil, "Close() with nil input always returns nil")
 
 			return nil, io.EOF
 		default:
@@ -145,11 +143,7 @@ func (s *Spooler[T]) Close() error {
 
 	s.buffer = nil
 
-	if err != nil {
-		return fmt.Errorf("error closing source: %w", err)
-	}
-
-	return nil
+	return err
 }
 
 // NewSpooler creates a new Spooler instance for buffering and sequentially

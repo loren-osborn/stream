@@ -894,12 +894,12 @@ func assertErrorString(t *testing.T, got, want error) {
 	//nolint:nestif // *FIXME*: for now
 	if want == nil {
 		if got != nil {
-			t.Errorf("expected no error, got %v", got)
+			t.Errorf("expected no error, got %#v", got)
 		}
 	} else {
 		if !errors.Is(got, want) {
 			if (got == nil) || (got.Error() != want.Error()) {
-				t.Errorf("expected error %v, got %v", want, got)
+				t.Errorf("expected error \n\t%#v, got \n\t%#v", want, got)
 			}
 		}
 	}
@@ -1130,6 +1130,285 @@ func TestNewTakeAndDropWhile(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+var errTestCloseError = errors.New("test close error")
+
+// TestSourceCloseError validates error propagation from Close() in SourceFunc.
+//
+//nolint:funlen,maintidx // **FIXME**
+func TestSourceCloseError(t *testing.T) {
+	t.Parallel()
+
+	expectedError := errTestCloseError
+
+	type PredicateDisposition int
+
+	HasNoPredicate := PredicateDisposition(0)
+	HasBooleanPredicate := PredicateDisposition(1)
+	HasNonBooleanPredicate := PredicateDisposition(2)
+
+	testSources := []struct {
+		name             string
+		srcGen           func(func(), func(), bool, *int, error) stream.Source[int]
+		eofImpliesClosed bool
+		hasPredicate     PredicateDisposition
+	}{
+		{
+			name: "SourceFunc",
+			srcGen: func(fn func(), _ func(), _ bool, ip *int, err error) stream.Source[int] {
+				return stream.SourceFunc(
+					func(context.Context) (*int, error) {
+						fn()
+
+						return ip, err
+					},
+					func() error {
+						return expectedError
+					},
+				)
+			},
+			eofImpliesClosed: false,
+			hasPredicate:     HasNoPredicate,
+		},
+		{
+			name: "Mapper",
+			srcGen: func(fn1 func(), fn2 func(), _ bool, ip *int, err error) stream.Source[int] {
+				mockSrc := &rawSourceFunc[int]{
+					srcFunc: func(context.Context) (*int, error) {
+						fn1()
+
+						return ip, err
+					},
+					closeFunc: func() error {
+						return expectedError
+					},
+				}
+
+				return stream.NewMapper(mockSrc, func(v int) int {
+					fn2()
+
+					return v + 1
+				})
+			},
+			eofImpliesClosed: true,
+			hasPredicate:     HasNonBooleanPredicate,
+		},
+		{
+			name: "Filter",
+			srcGen: func(fn1 func(), fn2 func(), predResult bool, ip *int, err error) stream.Source[int] {
+				mockSrc := &rawSourceFunc[int]{
+					srcFunc: func(context.Context) (*int, error) {
+						fn1()
+
+						return ip, err
+					},
+					closeFunc: func() error {
+						return expectedError
+					},
+				}
+
+				return stream.NewFilter(mockSrc, func(_ int) bool {
+					fn2()
+
+					return predResult
+				})
+			},
+			eofImpliesClosed: true,
+			hasPredicate:     HasBooleanPredicate,
+		},
+		{
+			name: "TakeWhile",
+			srcGen: func(fn1 func(), fn2 func(), predResult bool, ip *int, err error) stream.Source[int] {
+				mockSrc := &rawSourceFunc[int]{
+					srcFunc: func(context.Context) (*int, error) {
+						fn1()
+
+						return ip, err
+					},
+					closeFunc: func() error {
+						return expectedError
+					},
+				}
+
+				return stream.NewTakeWhile(mockSrc, func(_ int) bool {
+					fn2()
+
+					return predResult
+				})
+			},
+			eofImpliesClosed: true,
+			hasPredicate:     HasBooleanPredicate,
+		},
+		{
+			name: "ReduceTransformer",
+			srcGen: func(fn1 func(), fn2 func(), _ bool, ip *int, err error) stream.Source[int] {
+				mockSrc := &rawSourceFunc[int]{
+					srcFunc: func(context.Context) (*int, error) {
+						fn1()
+
+						return ip, err
+					},
+					closeFunc: func() error {
+						return expectedError
+					},
+				}
+
+				return stream.NewReduceTransformer(mockSrc, func(acc []int, next int) ([]int, []int) {
+					fn2()
+
+					return append(acc, next), nil
+				})
+			},
+			eofImpliesClosed: true,
+			hasPredicate:     HasNonBooleanPredicate,
+		},
+		{
+			name: "Spool",
+			srcGen: func(fn1 func(), _ func(), _ bool, ip *int, err error) stream.Source[int] {
+				mockSrc := &rawSourceFunc[int]{
+					srcFunc: func(context.Context) (*int, error) {
+						fn1()
+
+						return ip, err
+					},
+					closeFunc: func() error {
+						return expectedError
+					},
+				}
+
+				return stream.NewSpooler(mockSrc)
+			},
+			eofImpliesClosed: true,
+			hasPredicate:     HasNoPredicate,
+		},
+	}
+
+	one := 1
+
+	for _, ts := range testSources {
+		testSrc := ts
+
+		t.Run((testSrc.name + ": Error closing after EOF"), func(t *testing.T) {
+			t.Parallel()
+
+			source := testSrc.srcGen(func() {}, func() {}, true, nil, io.EOF)
+
+			// Pull should trigger Close() since it returns EOF
+			val, err := source.Pull(context.Background())
+			if val != nil {
+				t.Errorf("expected nil value, got %v", val)
+			}
+
+			// Error should be wrapped
+			expectedWrappedErr := fmt.Errorf(
+				"error closing source: %w",
+				errors.Join(fmt.Errorf("error closing source: %w", expectedError), io.EOF))
+
+			if testSrc.eofImpliesClosed {
+				// Instead, we're testing that the Pull() caller received the EOF, assumed
+				// the Source[T] was already closed, so didn't call Close() again, and
+				// didn't emit the error.
+				expectedWrappedErr = io.EOF
+			}
+
+			assertErrorString(t, err, expectedWrappedErr)
+		})
+
+		t.Run((testSrc.name + ": Error closing after canceled context"), func(t *testing.T) {
+			t.Parallel()
+
+			// Pull should trigger Close() since it cancels the context
+			cancelableCtx, cancel := context.WithCancel(context.Background())
+			source := testSrc.srcGen(cancel, func() {}, true, nil, io.EOF)
+
+			val, err := source.Pull(cancelableCtx)
+			if val != nil {
+				t.Errorf("expected nil value, got %v", val)
+			}
+
+			// Error should be wrapped
+			expectedWrappedErr := fmt.Errorf(
+				"error closing source while canceling: %w",
+				errors.Join(fmt.Errorf("error closing source: %w", expectedError), context.Canceled))
+			assertErrorString(t, err, expectedWrappedErr)
+		})
+
+		t.Run((testSrc.name + ": Error closing after precanceled context"), func(t *testing.T) {
+			t.Parallel()
+
+			// Pull should trigger Close() since it cancels the context
+			cancelableCtx, cancel := context.WithCancel(context.Background())
+
+			cancel()
+
+			source := testSrc.srcGen(func() {}, func() {}, true, nil, io.EOF)
+
+			val, err := source.Pull(cancelableCtx)
+			if val != nil {
+				t.Errorf("expected nil value, got %v", val)
+			}
+
+			// Error should be wrapped
+			expectedWrappedErr := fmt.Errorf(
+				"error closing source while canceling: %w",
+				errors.Join(fmt.Errorf("error closing source: %w", expectedError), context.Canceled))
+			assertErrorString(t, err, expectedWrappedErr)
+		})
+
+		// if testSrc.hasPredicate == HasBooleanPredicate {
+		// 	t.Run((testSrc.name + ": Error closing after false predicate"), func(t *testing.T) {
+		// 		t.Parallel()
+
+		// 		source := testSrc.srcGen(func() {}, func() {}, false, nil, io.EOF)
+
+		// 		// Pull should trigger Close() since it returns EOF
+		// 		val, err := source.Pull(context.Background())
+		// 		if val != nil {
+		// 			t.Errorf("expected nil value, got %v", val)
+		// 		}
+
+		// 		// Error should be wrapped
+		// 		expectedWrappedErr := fmt.Errorf(
+		// 			"error closing source: %w",
+		// 			errors.Join(fmt.Errorf("error closing source: %w", expectedError), io.EOF))
+
+		// 		assertErrorString(t, err, expectedWrappedErr)
+		// 	})
+		// }
+
+		if testSrc.hasPredicate != HasNoPredicate {
+			t.Run((testSrc.name + ": Error closing after canceled context in predicate"), func(t *testing.T) {
+				t.Parallel()
+
+				// Pull should trigger Close() since it cancels the context
+				cancelableCtx, cancel := context.WithCancel(context.Background())
+				source := testSrc.srcGen(func() {}, cancel, true, &one, nil)
+
+				val, err := source.Pull(cancelableCtx)
+				if val != nil {
+					t.Errorf("expected nil value, got %v", val)
+				}
+
+				// Error should be wrapped
+				expectedWrappedErr := fmt.Errorf(
+					"error closing source while canceling: %w",
+					errors.Join(fmt.Errorf("error closing source: %w", expectedError), context.Canceled))
+				assertErrorString(t, err, expectedWrappedErr)
+			})
+		}
+
+		t.Run((testSrc.name + ": Error directly closing"), func(t *testing.T) {
+			t.Parallel()
+
+			source := testSrc.srcGen(func() {}, func() {}, true, nil, io.EOF)
+
+			// Call Close directly
+			err := source.Close()
+			expectedDirectErr := fmt.Errorf("error closing source: %w", expectedError)
+			assertErrorString(t, err, expectedDirectErr)
+		})
 	}
 }
 
