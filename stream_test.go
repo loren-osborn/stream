@@ -1478,6 +1478,30 @@ func TestCloseIdempotency(t *testing.T) {
 				return stream.NewFilter(src, func(_ int) bool { return true })
 			},
 		},
+		{
+			name: "Taker",
+			makeTransformer: func(src stream.Source[int]) stream.Source[int] {
+				return stream.NewTaker(src, 3)
+			},
+		},
+		{
+			name: "Spooler",
+			makeTransformer: func(src stream.Source[int]) stream.Source[int] {
+				return stream.NewSpooler(src)
+			},
+		},
+		{
+			name: "ReduceTransformer",
+			makeTransformer: func(src stream.Source[int]) stream.Source[int] {
+				// For demonstration, use a trivial reducer that accumulates to an empty slice.
+				// The actual accumulation logic doesn't matter for a close test.
+				reducer := func(acc []int, next int) ([]int, []int) {
+					return append(acc, next), nil
+				}
+
+				return stream.NewReduceTransformer(src, reducer)
+			},
+		},
 	}
 
 	for _, testCase := range testCases {
@@ -1487,9 +1511,10 @@ func TestCloseIdempotency(t *testing.T) {
 			// This data structure will track how many times Close() is called.
 			var closeCalls int
 
-			// The source returns an error on the first Close(), then nil afterwards.
+			// The source returns an error on the first Close(), then nil on subsequent calls.
 			misbehavingSource := &rawSourceFunc[int]{
 				srcFunc: func(context.Context) (*int, error) {
+					// The exact return value is irrelevant here. We just need a valid integer.
 					dummy := 42
 
 					return &dummy, nil // not relevant for this test
@@ -1498,18 +1523,17 @@ func TestCloseIdempotency(t *testing.T) {
 					if closeCalls == 0 {
 						closeCalls++
 
-						return errTestClose
+						return errTestClose // non-nil error on first close
 					}
-
 					closeCalls++
 
-					return nil
+					return nil // nil on subsequent closes, demonstrating idempotency
 				},
 			}
 
 			transformer := testCase.makeTransformer(misbehavingSource)
 
-			// First call to Close() should yield a non-nil error (maybe wrapped).
+			// First call to Close() should yield a non-nil error (possibly wrapped).
 			err1 := transformer.Close()
 			if err1 == nil {
 				t.Errorf("expected a non-nil error on first Close(), got nil")
@@ -1521,7 +1545,7 @@ func TestCloseIdempotency(t *testing.T) {
 				t.Errorf("expected second Close() call to return nil, got %v", err2)
 			}
 
-			// Third call should also return nil.
+			// Third (and further) calls should also return nil.
 			err3 := transformer.Close()
 			if err3 != nil {
 				t.Errorf("expected third Close() call to return nil, got %v", err3)
