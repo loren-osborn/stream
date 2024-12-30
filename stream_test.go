@@ -180,22 +180,43 @@ func TestReduceTransformer(t *testing.T) {
 	}
 }
 
-// ErrorTestBehaviorFlags defines named behaviors and expectations for more readable test cases.
-type ErrorTestBehaviorFlags int
+// =====================
+//  Behavior vs. Expectation
+// =====================
 
-// Behaviors for TestSinkErrorHandling and TestTransformerErrorHandling tests.
+type BehaviorFlags int
+
+// BehaviorFlags define how the context or source *behaves*, e.g. pre-cancel.
 const (
-	PreCancelContext ErrorTestBehaviorFlags = 1 << iota
-	ExpectCloseInsteadOfPull
-	ExpectPullCall
-	CancelWithinPullCall
-	DeferCancelFromPullCall
-	ExpectCloseAfterPull
-	ExpectPredicateCall
-	CancelWithinPredicateCall
-	ExpectCloseAfterPredicate
+	BPreCancelContext BehaviorFlags = 1 << iota
+	BCancelWithinPullCall
+	BCancelWithinPredicateCall
+	BDeferCancelFromPullCall
 )
 
+type ExpectationFlags int
+
+// ExpectationFlags define what test steps or calls we *expect* to happen.
+const (
+	EExpectCloseInsteadOfPull ExpectationFlags = 1 << iota
+	EExpectPullCall
+	EExpectCloseAfterPull
+	EExpectPredicateCall
+	EExpectCloseAfterPredicate
+)
+
+// scenarioDefinition is the simpler, data-only struct describing each test scenario.
+type scenarioDefinition struct {
+	ScenarioName      string
+	Behaviors         BehaviorFlags
+	Expectations      ExpectationFlags
+	PullErr           error
+	ExpectedError     error
+	ExpectedSinkError bool
+	NeedsPredicate    bool
+}
+
+// emittedLambdas holds the lambdas for each test scenario (unchanged structure).
 type emittedLambdas struct {
 	ctxGen          func() context.Context
 	pullLambda      func(context.Context) (*int, error)
@@ -204,6 +225,103 @@ type emittedLambdas struct {
 	finalLambda     func()
 }
 
+// buildErrorScenario interprets a scenarioDefinition to produce the final lambdas.
+//nolint: funlen,gocognit,cyclop // **FIXME**
+func buildErrorScenario(t *testing.T, def scenarioDefinition) *emittedLambdas {
+	t.Helper()
+
+	cancelableCtx, cancel := context.WithCancel(context.Background())
+	pullCallCount := 0
+	closeCallCount := 0
+	predicateCallCount := 0
+
+	if def.Behaviors&BPreCancelContext != 0 {
+		cancel()
+	}
+
+	return &emittedLambdas{
+		ctxGen: func() context.Context {
+			return cancelableCtx
+		},
+		pullLambda: func(_ context.Context) (*int, error) {
+			if def.Expectations&EExpectCloseInsteadOfPull != 0 ||
+				def.Expectations&EExpectPullCall == 0 {
+				t.Errorf("Pull() called unexpectedly in scenario %s", def.ScenarioName)
+			}
+
+			if def.Behaviors&BCancelWithinPullCall != 0 {
+				cancel()
+			}
+			defer func() {
+				if def.Behaviors&BDeferCancelFromPullCall != 0 {
+					cancel()
+				}
+			}()
+
+			pullCallCount++
+			if pullCallCount > 1 {
+				t.Errorf("Pull() unexpectedly called %d times in scenario %s", pullCallCount, def.ScenarioName)
+			}
+			if closeCallCount > 0 {
+				t.Errorf("Close() unexpectedly called before Pull() in scenario %s", def.ScenarioName)
+			}
+			if predicateCallCount > 0 {
+				t.Errorf("predicate unexpectedly called before Pull() in scenario %s", def.ScenarioName)
+			}
+			if pullCallCount+closeCallCount+predicateCallCount > 16 {
+				t.Fatalf("Runaway execution in Pull() for scenario %s", def.ScenarioName)
+			}
+
+			if def.PullErr == nil {
+				val := 1
+
+				return &val, nil
+			}
+
+			return nil, def.PullErr
+		},
+		closeLambda: func() error {
+			if def.Expectations&(EExpectCloseInsteadOfPull|EExpectCloseAfterPull|EExpectCloseAfterPredicate) == 0 {
+				t.Errorf("Close() called unexpectedly in scenario %s", def.ScenarioName)
+			}
+			closeCallCount++
+			if closeCallCount > 1 {
+				t.Errorf("Close() unexpectedly called multiple times in scenario %s", def.ScenarioName)
+			}
+
+			return nil
+		},
+		predicateLambda: func() {
+			predicateCallCount++
+			if predicateCallCount > 1 {
+				t.Errorf("predicate unexpectedly called multiple times in scenario %s", def.ScenarioName)
+			}
+			if def.Behaviors&BCancelWithinPredicateCall != 0 {
+				cancel()
+			}
+		},
+		finalLambda: func() {
+			expectedCloseCalls := 0
+			if def.Expectations&(EExpectCloseInsteadOfPull|EExpectCloseAfterPull|EExpectCloseAfterPredicate) != 0 {
+				expectedCloseCalls = 1
+			}
+			if closeCallCount != expectedCloseCalls {
+				t.Errorf("Close() called %d times; expected %d in scenario %s",
+					closeCallCount, expectedCloseCalls, def.ScenarioName)
+			}
+			if def.Expectations&EExpectPullCall != 0 && pullCallCount == 0 {
+				t.Errorf("Expected Pull() but never called in scenario %s", def.ScenarioName)
+			}
+			if def.Expectations&EExpectPredicateCall != 0 && predicateCallCount == 0 {
+				t.Errorf("Expected predicate call but didn't happen in scenario %s", def.ScenarioName)
+			}
+
+			// Could add additional checks for the EOF scenario or other behaviors if needed.
+		},
+	}
+}
+
+// errorTestCase is your existing structure used by TestSinkErrorHandling & TestTransformerErrorHandling.
 type errorTestCase struct {
 	name              string
 	lambdaEmitter     func(*testing.T) *emittedLambdas
@@ -212,170 +330,97 @@ type errorTestCase struct {
 	needPredicate     bool
 }
 
-// getErrorTestCases returns a list of test cases for error handling behaviors.
-//
-//nolint:funlen,gocognit,cyclop // test scaffolding
+// getErrorTestCases returns a list of test cases for error handling behaviors,
+// now referencing the new scenarioDefinition + buildErrorScenario.
+//nolint: funlen // **FIXME**
 func getErrorTestCases(t *testing.T) []errorTestCase {
 	t.Helper()
 
-	type contextKeyTestName struct{}
-
-	lambdaEmitterFactory := func(flags ErrorTestBehaviorFlags, pullErr error) func(*testing.T) *emittedLambdas {
-		return func(t *testing.T) *emittedLambdas {
-			t.Helper()
-
-			testName := t.Name()
-			cancelableCtx, cancel := context.WithCancel(context.Background())
-			finalCtx := context.WithValue(cancelableCtx, contextKeyTestName{}, testName)
-
-			pullCallCount := 0
-			closeCallCount := 0
-			predicateCallCount := 0
-
-			if flags&PreCancelContext != 0 {
-				cancel()
-			}
-
-			return &emittedLambdas{
-				ctxGen: func() context.Context {
-					return finalCtx
-				},
-				pullLambda: func(ctx context.Context) (*int, error) {
-					if (flags&ExpectCloseInsteadOfPull != 0) || (flags&ExpectPullCall == 0) {
-						t.Errorf("In Pull() call when not expected")
-					}
-					if flags&CancelWithinPullCall != 0 {
-						cancel()
-					}
-					defer func() {
-						if flags&DeferCancelFromPullCall != 0 {
-							cancel()
-						}
-					}()
-
-					pullCallCount++
-					if pullCallCount > 1 {
-						t.Errorf("Pull() unexpectedly called %d times.", pullCallCount)
-					}
-					if closeCallCount > 0 {
-						t.Errorf("Close() unexpectedly called (%d times) before Pull().", closeCallCount)
-					}
-					if predicateCallCount > 0 {
-						t.Errorf("predicate unexpectedly called (%d times) before Pull().", predicateCallCount)
-					}
-					if pullCallCount+closeCallCount+predicateCallCount > 16 {
-						t.Fatalf("Runaway execution detected in Pull().")
-					}
-
-					anyTestName := ctx.Value(contextKeyTestName{})
-					if innerTestName, ok := anyTestName.(string); !ok || testName != innerTestName {
-						t.Errorf("Didn't get expected context %v, got %v instead", finalCtx, ctx)
-					}
-
-					if pullErr == nil {
-						val := 1
-
-						return &val, nil
-					}
-
-					return nil, pullErr
-				},
-				closeLambda: func() error {
-					if flags&(ExpectCloseInsteadOfPull|ExpectCloseAfterPull|ExpectCloseAfterPredicate) == 0 {
-						t.Errorf("In Close() call when not expected")
-					}
-					closeCallCount++
-					if closeCallCount > 1 {
-						t.Errorf("Close() unexpectedly called %d times (more than one).", closeCallCount)
-					}
-
-					return nil
-				},
-				predicateLambda: func() {
-					predicateCallCount++
-					if predicateCallCount > 1 {
-						t.Errorf("predicate unexpectedly called %d times (more than one).", predicateCallCount)
-					}
-					if flags&CancelWithinPredicateCall != 0 {
-						cancel()
-					}
-				},
-				finalLambda: func() {
-					expectedCloseCalls := 0
-					if flags&(ExpectCloseInsteadOfPull|ExpectCloseAfterPull|ExpectCloseAfterPredicate) != 0 {
-						expectedCloseCalls = 1
-					}
-					if closeCallCount != expectedCloseCalls {
-						t.Errorf("Close() called %d times when %d expected", closeCallCount, expectedCloseCalls)
-					}
-					if flags&ExpectPullCall != 0 && pullCallCount == 0 {
-						t.Errorf("Expected Pull() call but none was made")
-					}
-					if flags&ExpectPredicateCall != 0 && predicateCallCount == 0 {
-						t.Errorf("Expected predicate call but none was made")
-					}
-				},
-			}
-		}
+	scenarioDefinitions := []scenarioDefinition{
+		{
+			ScenarioName:      "Pre-canceled",
+			Behaviors:         BPreCancelContext,
+			Expectations:      EExpectCloseInsteadOfPull,
+			PullErr:           nil,
+			ExpectedError:     fmt.Errorf("operation canceled: %w", context.Canceled),
+			ExpectedSinkError: true,
+			NeedsPredicate:    false,
+		},
+		{
+			ScenarioName:      "Canceled In Pull with unwrapped Error",
+			Behaviors:         BCancelWithinPullCall,
+			Expectations:      EExpectPullCall | EExpectCloseAfterPull,
+			PullErr:           context.Canceled,
+			ExpectedError:     fmt.Errorf("operation canceled: %w", context.Canceled),
+			ExpectedSinkError: true,
+			NeedsPredicate:    false,
+		},
+		{
+			ScenarioName: "Canceled In Pull with wrapped Error",
+			Behaviors:    BCancelWithinPullCall,
+			Expectations: EExpectPullCall | EExpectCloseAfterPull,
+			PullErr:      fmt.Errorf("operation canceled: %w", context.Canceled),
+			ExpectedError: fmt.Errorf(
+				"operation canceled: %w",
+				context.Canceled,
+			),
+			ExpectedSinkError: true,
+			NeedsPredicate:    false,
+		},
+		{
+			ScenarioName:      "Canceled after Pull return",
+			Behaviors:         BDeferCancelFromPullCall,
+			Expectations:      EExpectPullCall | EExpectCloseAfterPull,
+			PullErr:           nil,
+			ExpectedError:     fmt.Errorf("operation canceled: %w", context.Canceled),
+			ExpectedSinkError: true,
+			NeedsPredicate:    false,
+		},
+		{
+			ScenarioName:      "Canceled in predicate",
+			Behaviors:         BCancelWithinPredicateCall,
+			Expectations:      EExpectPullCall | EExpectPredicateCall | EExpectCloseAfterPredicate,
+			PullErr:           nil,
+			ExpectedError:     fmt.Errorf("operation canceled: %w", context.Canceled),
+			ExpectedSinkError: true,
+			NeedsPredicate:    true,
+		},
+		{
+			ScenarioName:      "EOF",
+			Behaviors:         0,
+			Expectations:      EExpectPullCall,
+			PullErr:           io.EOF,
+			ExpectedError:     io.EOF,
+			ExpectedSinkError: false,
+			NeedsPredicate:    false,
+		},
+		{
+			ScenarioName:      "ErrorHandling",
+			Behaviors:         0,
+			Expectations:      EExpectPullCall,
+			PullErr:           ErrTestOriginalError,
+			ExpectedError:     fmt.Errorf("data pull failed: %w", ErrTestOriginalError),
+			ExpectedSinkError: true,
+			NeedsPredicate:    false,
+		},
 	}
 
-	return []errorTestCase{
-		{
-			name:              "Pre-canceled",
-			lambdaEmitter:     lambdaEmitterFactory(PreCancelContext|ExpectCloseInsteadOfPull, nil),
-			expectedError:     fmt.Errorf("operation canceled: %w", context.Canceled),
-			expectedSinkError: true,
-			needPredicate:     false,
-		},
-		{
-			name:              "Canceled In Pull with unwrapped Error",
-			lambdaEmitter:     lambdaEmitterFactory(ExpectPullCall|CancelWithinPullCall|ExpectCloseAfterPull, context.Canceled),
-			expectedError:     fmt.Errorf("operation canceled: %w", context.Canceled),
-			expectedSinkError: true,
-			needPredicate:     false,
-		},
-		{
-			name: "Canceled In Pull with wrapped Error",
-			lambdaEmitter: lambdaEmitterFactory(
-				ExpectPullCall|CancelWithinPullCall|ExpectCloseAfterPull,
-				fmt.Errorf("operation canceled: %w", context.Canceled),
-			),
-			expectedError:     fmt.Errorf("operation canceled: %w", context.Canceled),
-			expectedSinkError: true,
-			needPredicate:     false,
-		},
-		{
-			name:              "Canceled after Pull return",
-			lambdaEmitter:     lambdaEmitterFactory(ExpectPullCall|DeferCancelFromPullCall|ExpectCloseAfterPull, nil),
-			expectedError:     fmt.Errorf("operation canceled: %w", context.Canceled),
-			expectedSinkError: true,
-			needPredicate:     false,
-		},
-		{
-			name: "Canceled in predicate",
-			lambdaEmitter: lambdaEmitterFactory(
-				ExpectPullCall|ExpectPredicateCall|CancelWithinPredicateCall|ExpectCloseAfterPredicate,
-				nil,
-			),
-			expectedError:     fmt.Errorf("operation canceled: %w", context.Canceled),
-			expectedSinkError: true,
-			needPredicate:     true,
-		},
-		{
-			name:              "EOF",
-			lambdaEmitter:     lambdaEmitterFactory(ExpectPullCall, io.EOF),
-			expectedError:     io.EOF,
-			expectedSinkError: false,
-			needPredicate:     false,
-		},
-		{
-			name:              "ErrorHandling",
-			lambdaEmitter:     lambdaEmitterFactory(ExpectPullCall, ErrTestOriginalError),
-			expectedError:     fmt.Errorf("data pull failed: %w", ErrTestOriginalError),
-			expectedSinkError: true,
-			needPredicate:     false,
-		},
+	out := make([]errorTestCase, 0, 7)
+	for _, def := range scenarioDefinitions {
+		out = append(out, errorTestCase{
+			name: def.ScenarioName,
+			lambdaEmitter: func(t *testing.T) *emittedLambdas {
+				t.Helper()
+
+				return buildErrorScenario(t, def)
+			},
+			expectedError:     def.ExpectedError,
+			expectedSinkError: def.ExpectedSinkError,
+			needPredicate:     def.NeedsPredicate,
+		})
 	}
+
+	return out
 }
 
 type sinkOutputTestCase[T any] struct {
@@ -439,7 +484,6 @@ func TestSinkErrorHandling(t *testing.T) {
 			}
 
 			val, err := tCase.Second.generator(outerCtx, source, lambdas.predicateLambda)
-
 			lambdas.finalLambda()
 
 			if !tCase.First.expectedSinkError {
@@ -827,7 +871,7 @@ func TestNewDropperBasic(t *testing.T) {
 
 	data := []int{1, 2, 3, 4, 5, 6, 7}
 	source := stream.NewSliceSource(data)
-	dropper := stream.NewDropper(source, 3) // Skip first 3 elements
+	dropper := stream.NewDropper(source, 3) // Skip the first 3 elements
 
 	expected := []int{4, 5, 6, 7}
 	pullAndCheckSequence(t, dropper, expected)
@@ -1266,7 +1310,6 @@ func TestSourceCloseError(t *testing.T) {
 				"error closing source while canceling: %w",
 				errors.Join(fmt.Errorf("error closing source: %w", errTestCloseError), context.Canceled),
 			)
-
 			assertErrorString(t, err, expectedWrappedErr)
 		})
 
