@@ -1141,7 +1141,18 @@ var errTestCloseError = errors.New("test close error")
 func TestSourceCloseError(t *testing.T) {
 	t.Parallel()
 
-	expectedError := errTestCloseError
+	mockGen := func(fn1 func(), ip *int, err error) stream.Source[int] {
+		return &rawSourceFunc[int]{
+			srcFunc: func(context.Context) (*int, error) {
+				fn1()
+
+				return ip, err
+			},
+			closeFunc: func() error {
+				return errTestCloseError
+			},
+		}
+	}
 
 	testSources := []struct {
 		name             string
@@ -1159,7 +1170,7 @@ func TestSourceCloseError(t *testing.T) {
 						return ip, err
 					},
 					func() error {
-						return expectedError
+						return errTestCloseError
 					},
 				)
 			},
@@ -1169,18 +1180,7 @@ func TestSourceCloseError(t *testing.T) {
 		{
 			name: "Mapper",
 			srcGen: func(fn1 func(), fn2 func(), ip *int, err error) stream.Source[int] {
-				mockSrc := &rawSourceFunc[int]{
-					srcFunc: func(context.Context) (*int, error) {
-						fn1()
-
-						return ip, err
-					},
-					closeFunc: func() error {
-						return expectedError
-					},
-				}
-
-				return stream.NewMapper(mockSrc, func(v int) int {
+				return stream.NewMapper(mockGen(fn1, ip, err), func(v int) int {
 					fn2()
 
 					return v + 1
@@ -1192,18 +1192,7 @@ func TestSourceCloseError(t *testing.T) {
 		{
 			name: "Filter",
 			srcGen: func(fn1 func(), fn2 func(), ip *int, err error) stream.Source[int] {
-				mockSrc := &rawSourceFunc[int]{
-					srcFunc: func(context.Context) (*int, error) {
-						fn1()
-
-						return ip, err
-					},
-					closeFunc: func() error {
-						return expectedError
-					},
-				}
-
-				return stream.NewFilter(mockSrc, func(_ int) bool {
+				return stream.NewFilter(mockGen(fn1, ip, err), func(_ int) bool {
 					fn2()
 
 					return true
@@ -1215,18 +1204,7 @@ func TestSourceCloseError(t *testing.T) {
 		{
 			name: "TakeWhile",
 			srcGen: func(fn1 func(), fn2 func(), ip *int, err error) stream.Source[int] {
-				mockSrc := &rawSourceFunc[int]{
-					srcFunc: func(context.Context) (*int, error) {
-						fn1()
-
-						return ip, err
-					},
-					closeFunc: func() error {
-						return expectedError
-					},
-				}
-
-				return stream.NewTakeWhile(mockSrc, func(_ int) bool {
+				return stream.NewTakeWhile(mockGen(fn1, ip, err), func(_ int) bool {
 					fn2()
 
 					return true
@@ -1238,18 +1216,7 @@ func TestSourceCloseError(t *testing.T) {
 		{
 			name: "ReduceTransformer",
 			srcGen: func(fn1 func(), fn2 func(), ip *int, err error) stream.Source[int] {
-				mockSrc := &rawSourceFunc[int]{
-					srcFunc: func(context.Context) (*int, error) {
-						fn1()
-
-						return ip, err
-					},
-					closeFunc: func() error {
-						return expectedError
-					},
-				}
-
-				return stream.NewReduceTransformer(mockSrc, func(acc []int, next int) ([]int, []int) {
+				return stream.NewReduceTransformer(mockGen(fn1, ip, err), func(acc []int, next int) ([]int, []int) {
 					fn2()
 
 					return append(acc, next), nil
@@ -1261,18 +1228,7 @@ func TestSourceCloseError(t *testing.T) {
 		{
 			name: "Spool",
 			srcGen: func(fn1 func(), _ func(), ip *int, err error) stream.Source[int] {
-				mockSrc := &rawSourceFunc[int]{
-					srcFunc: func(context.Context) (*int, error) {
-						fn1()
-
-						return ip, err
-					},
-					closeFunc: func() error {
-						return expectedError
-					},
-				}
-
-				return stream.NewSpooler(mockSrc)
+				return stream.NewSpooler(mockGen(fn1, ip, err))
 			},
 			eofImpliesClosed: true,
 			hasPredicate:     false,
@@ -1298,7 +1254,7 @@ func TestSourceCloseError(t *testing.T) {
 			// Error should be wrapped
 			expectedWrappedErr := fmt.Errorf(
 				"error closing source: %w",
-				errors.Join(fmt.Errorf("error closing source: %w", expectedError), io.EOF))
+				errors.Join(fmt.Errorf("error closing source: %w", errTestCloseError), io.EOF))
 
 			if testSrc.eofImpliesClosed {
 				// Instead, we're testing that the Pull() caller received the EOF, assumed
@@ -1325,7 +1281,7 @@ func TestSourceCloseError(t *testing.T) {
 			// Error should be wrapped
 			expectedWrappedErr := fmt.Errorf(
 				"error closing source while canceling: %w",
-				errors.Join(fmt.Errorf("error closing source: %w", expectedError), context.Canceled))
+				errors.Join(fmt.Errorf("error closing source: %w", errTestCloseError), context.Canceled))
 			assertErrorString(t, err, expectedWrappedErr)
 		})
 
@@ -1347,7 +1303,7 @@ func TestSourceCloseError(t *testing.T) {
 			// Error should be wrapped
 			expectedWrappedErr := fmt.Errorf(
 				"error closing source while canceling: %w",
-				errors.Join(fmt.Errorf("error closing source: %w", expectedError), context.Canceled))
+				errors.Join(fmt.Errorf("error closing source: %w", errTestCloseError), context.Canceled))
 			assertErrorString(t, err, expectedWrappedErr)
 		})
 
@@ -1367,7 +1323,7 @@ func TestSourceCloseError(t *testing.T) {
 				// Error should be wrapped
 				expectedWrappedErr := fmt.Errorf(
 					"error closing source while canceling: %w",
-					errors.Join(fmt.Errorf("error closing source: %w", expectedError), context.Canceled))
+					errors.Join(fmt.Errorf("error closing source: %w", errTestCloseError), context.Canceled))
 				assertErrorString(t, err, expectedWrappedErr)
 			})
 		}
@@ -1379,10 +1335,110 @@ func TestSourceCloseError(t *testing.T) {
 
 			// Call Close directly
 			err := source.Close()
-			expectedDirectErr := fmt.Errorf("error closing source: %w", expectedError)
+			expectedDirectErr := fmt.Errorf("error closing source: %w", errTestCloseError)
 			assertErrorString(t, err, expectedDirectErr)
 		})
 	}
+}
+
+func TestPreCanceledSliceSource(t *testing.T) {
+	t.Parallel()
+
+	data := []int{1, 2, 3, 4, 5}
+	source := stream.NewSliceSource(data)
+	cancelableCtx, cancel := context.WithCancel(context.Background())
+	expectedError := fmt.Errorf("operation canceled: %w", context.Canceled)
+
+	cancel()
+
+	val, err := source.Pull(cancelableCtx)
+
+	if val != nil {
+		t.Errorf("expected nil, got %v", val)
+	}
+
+	assertErrorString(t, err, expectedError)
+}
+
+func TestTakerTerminationCloseErr(t *testing.T) {
+	t.Parallel()
+
+	source := &rawSourceFunc[int]{
+		srcFunc: func(context.Context) (*int, error) {
+			one := 1
+
+			return &one, nil
+		},
+		closeFunc: func() error {
+			return errTestCloseError
+		},
+	}
+	taker := stream.NewTaker(source, 0)
+	expectedErr := fmt.Errorf(
+		"error closing source: %w",
+		errors.Join(fmt.Errorf("error closing source: %w", errTestCloseError), io.EOF),
+	)
+	val, err := taker.Pull(context.Background())
+
+	if val != nil {
+		t.Errorf("expected nil, got %v", val)
+	}
+
+	assertErrorString(t, err, expectedErr)
+}
+
+func TestPreCanceledSinkCloseErr(t *testing.T) {
+	t.Parallel()
+
+	source := &rawSourceFunc[int]{
+		srcFunc: func(context.Context) (*int, error) {
+			one := 1
+
+			return &one, nil
+		},
+		closeFunc: func() error {
+			return errTestCloseError
+		},
+	}
+	cancelableCtx, cancel := context.WithCancel(context.Background())
+	// expectedError := fmt.Errorf("operation canceled: %w", context.Canceled)
+
+	cancel()
+
+	t.Run(("SliceSink"), func(t *testing.T) {
+		t.Parallel()
+
+		dummyDest := []int{}
+		sink := stream.NewSliceSink(&dummyDest)
+		expectedError := fmt.Errorf(
+			"error closing source while canceling: %w",
+			errors.Join(errTestCloseError, context.Canceled),
+		)
+		val, err := sink.Append(cancelableCtx, source)
+
+		if val != nil {
+			t.Errorf("expected nil, got %v", val)
+		}
+
+		assertErrorString(t, err, expectedError)
+	})
+
+	t.Run(("Reducer"), func(t *testing.T) {
+		t.Parallel()
+
+		sink := stream.NewReducer(0, func(acc, next int) int { return acc + next })
+		expectedError := fmt.Errorf(
+			"error closing source while canceling: %w",
+			errors.Join(errTestCloseError, context.Canceled),
+		)
+		val, err := sink.Reduce(cancelableCtx, source)
+
+		if val != 0 {
+			t.Errorf("expected nil, got %v", val)
+		}
+
+		assertErrorString(t, err, expectedError)
+	})
 }
 
 // Helper function to compare two slices for equality.
