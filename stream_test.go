@@ -423,15 +423,14 @@ func TestSinkErrorHandling(t *testing.T) {
 	t.Parallel()
 
 	for _, tCase := range CartesianProduct(getErrorTestCases(t), getSinkOutputTestCase()) {
-		testCase := tCase
-		if testCase.First.needPredicate && !testCase.Second.hasPredicate {
+		if tCase.First.needPredicate && !tCase.Second.hasPredicate {
 			continue // Invalid test combination
 		}
 
-		t.Run(fmt.Sprintf("%s %s", testCase.Second.name, testCase.First.name), func(t *testing.T) {
+		t.Run(fmt.Sprintf("%s %s", tCase.Second.name, tCase.First.name), func(t *testing.T) {
 			t.Parallel()
 
-			lambdas := testCase.First.lambdaEmitter(t)
+			lambdas := tCase.First.lambdaEmitter(t)
 			outerCtx := lambdas.ctxGen()
 
 			source := &rawSourceFunc[int]{
@@ -439,11 +438,11 @@ func TestSinkErrorHandling(t *testing.T) {
 				closeFunc: lambdas.closeLambda,
 			}
 
-			val, err := testCase.Second.generator(outerCtx, source, lambdas.predicateLambda)
+			val, err := tCase.Second.generator(outerCtx, source, lambdas.predicateLambda)
 
 			lambdas.finalLambda()
 
-			if !testCase.First.expectedSinkError {
+			if !tCase.First.expectedSinkError {
 				// We expect no error
 				assertErrorString(t, err, nil)
 
@@ -459,7 +458,7 @@ func TestSinkErrorHandling(t *testing.T) {
 				}
 			}
 
-			assertErrorString(t, err, testCase.First.expectedError)
+			assertErrorString(t, err, tCase.First.expectedError)
 		})
 	}
 }
@@ -590,26 +589,25 @@ func TestTransformerErrorHandling(t *testing.T) {
 	t.Parallel()
 
 	for _, tCase := range CartesianProduct(getErrorTestCases(t), getTransformerIntOutputTestCase()) {
-		testCase := tCase
-		if testCase.First.needPredicate && !testCase.Second.hasPredicate {
+		if tCase.First.needPredicate && !tCase.Second.hasPredicate {
 			continue // Invalid test
 		}
 
-		t.Run(fmt.Sprintf("%s %s", testCase.Second.name, testCase.First.name), func(t *testing.T) {
+		t.Run(fmt.Sprintf("%s %s", tCase.Second.name, tCase.First.name), func(t *testing.T) {
 			t.Parallel()
 
-			if testCase.First.expectedError == nil {
+			if tCase.First.expectedError == nil {
 				t.Errorf("BAD TEST: Should expect an error")
 			}
 
-			lambdas := testCase.First.lambdaEmitter(t)
+			lambdas := tCase.First.lambdaEmitter(t)
 			outerCtx := lambdas.ctxGen()
 			source := &rawSourceFunc[int]{
 				srcFunc:   lambdas.pullLambda,
 				closeFunc: lambdas.closeLambda,
 			}
 
-			puller := testCase.Second.generator(source, outerCtx, lambdas.predicateLambda)
+			puller := tCase.Second.generator(source, outerCtx, lambdas.predicateLambda)
 
 			val, err := puller()
 
@@ -623,7 +621,7 @@ func TestTransformerErrorHandling(t *testing.T) {
 				}
 			}
 
-			assertErrorString(t, err, testCase.First.expectedError)
+			assertErrorString(t, err, tCase.First.expectedError)
 		})
 	}
 }
@@ -818,7 +816,7 @@ func TestReducerCancelCtx(t *testing.T) {
 				t.Errorf("val should be 0, but was %v", val)
 			}
 
-			return nil, err //nolint: wrapcheck // testing
+			return nil, err //nolint:wrapcheck // testing
 		}
 	})
 }
@@ -1405,6 +1403,88 @@ func TestPreCanceledSinkCloseErr(t *testing.T) {
 
 		assertErrorString(t, err, expectedError)
 	})
+}
+
+var errTestClose = errors.New("test close error")
+
+// ===============================
+//   New: Test Close Idempotency
+// ===============================
+//
+// This test ensures that if a misbehaving source returns an error on the first Close(),
+// the transformer's subsequent Close() calls remain idempotent (i.e., return nil).
+
+//nolint: funlen // **fixme**
+func TestCloseIdempotency(t *testing.T) {
+	t.Parallel()
+
+	// We'll test multiple transformers. Feel free to add more as desired.
+	testCases := []struct {
+		name            string
+		makeTransformer func(stream.Source[int]) stream.Source[int]
+	}{
+		{
+			name: "Mapper",
+			makeTransformer: func(src stream.Source[int]) stream.Source[int] {
+				return stream.NewMapper(src, func(val int) int { return val })
+			},
+		},
+		{
+			name: "Filter",
+			makeTransformer: func(src stream.Source[int]) stream.Source[int] {
+				return stream.NewFilter(src, func(_ int) bool { return true })
+			},
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			// This data structure will track how many times Close() is called.
+			var closeCalls int
+
+			// The source returns an error on the first Close(), then nil afterwards.
+			misbehavingSource := &rawSourceFunc[int]{
+				srcFunc: func(context.Context) (*int, error) {
+					dummy := 42
+
+					return &dummy, nil // not relevant for this test
+				},
+				closeFunc: func() error {
+					if closeCalls == 0 {
+						closeCalls++
+
+						return errTestClose
+					}
+
+					closeCalls++
+
+					return nil
+				},
+			}
+
+			transformer := testCase.makeTransformer(misbehavingSource)
+
+			// First call to Close() should yield a non-nil error (maybe wrapped).
+			err1 := transformer.Close()
+			if err1 == nil {
+				t.Errorf("expected a non-nil error on first Close(), got nil")
+			}
+
+			// Second call should return nil, signifying idempotency.
+			err2 := transformer.Close()
+			if err2 != nil {
+				t.Errorf("expected second Close() call to return nil, got %v", err2)
+			}
+
+			// Third call should also return nil.
+			err3 := transformer.Close()
+			if err3 != nil {
+				t.Errorf("expected third Close() call to return nil, got %v", err3)
+			}
+		})
+	}
 }
 
 // equalSlices is a helper function to compare two slices for equality.
