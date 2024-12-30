@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	//nolint:depguard // package under test.
+	//nolint:depguard // We want to test the stream package.
 	"github.com/loren-osborn/stream"
 )
 
@@ -27,10 +27,12 @@ func TestSliceSource(t *testing.T) {
 		value, err := source.Pull(context.Background())
 		assertError(t, err, nil)
 
+		if value != nil && *value != expected {
+			t.Errorf("expected %d, got %d", expected, *value)
+		}
+
 		if value == nil {
 			t.Errorf("expected %d, got nil", expected)
-		} else if *value != expected {
-			t.Errorf("expected %d, got %d", expected, *value)
 		}
 	}
 
@@ -55,10 +57,12 @@ func TestMapper(t *testing.T) {
 		value, err := mapper.Pull(context.Background())
 		assertError(t, err, nil)
 
+		if value != nil && *value != exp {
+			t.Errorf("expected %d, got %d", exp, *value)
+		}
+
 		if value == nil {
 			t.Errorf("expected %d, got nil", exp)
-		} else if *value != exp {
-			t.Errorf("expected %d, got %d", exp, *value)
 		}
 	}
 
@@ -83,10 +87,12 @@ func TestFilter(t *testing.T) {
 		value, err := filter.Pull(context.Background())
 		assertError(t, err, nil)
 
+		if value != nil && *value != exp {
+			t.Errorf("expected %d, got %d", exp, *value)
+		}
+
 		if value == nil {
 			t.Errorf("expected %d, got nil", exp)
-		} else if *value != exp {
-			t.Errorf("expected %d, got %d", exp, *value)
 		}
 	}
 
@@ -104,7 +110,9 @@ func TestReducer(t *testing.T) {
 
 	data := []int{1, 2, 3, 4, 5}
 	source := stream.NewSliceSource(data)
-	consumer := stream.NewReducer(0, func(acc, next int) int { return acc + next })
+	consumer := stream.NewReducer(0, func(acc, next int) int {
+		return acc + next
+	})
 
 	result, err := consumer.Reduce(context.Background(), source)
 	assertError(t, err, nil)
@@ -130,6 +138,7 @@ func TestReduceTransformer(t *testing.T) {
 		}
 
 		acc[0] += next
+
 		if itCount%3 == 0 {
 			return acc, nil
 		}
@@ -144,10 +153,12 @@ func TestReduceTransformer(t *testing.T) {
 		value, err := transformer.Pull(context.Background())
 		assertError(t, err, nil)
 
+		if value != nil && *value != exp {
+			t.Errorf("expected %d, got %d", exp, *value)
+		}
+
 		if value == nil {
 			t.Errorf("expected %d, got nil", exp)
-		} else if *value != exp {
-			t.Errorf("expected %d, got %d", exp, value)
 		}
 	}
 
@@ -159,21 +170,20 @@ func TestReduceTransformer(t *testing.T) {
 	}
 }
 
-// ErrorTestBehaviorFlags defines named behviours and expectations for more readable test cases.
+// ErrorTestBehaviorFlags defines named behaviors and expectations for more readable test cases.
 type ErrorTestBehaviorFlags int
 
 // Define behaviors and expectations for TestSinkErrorHandling and TestTransformerErrorHandling tests.
 const (
-	PreCancelContext         ErrorTestBehaviorFlags = 1 << iota // Cancel context before starting test
-	ExpectCloseInsteadOfPull                                    // Expect Close() to be called instead of Pull()
-	ExpectPullCall                                              // Expect Pull() to be called
-	// CancelWithinPullCall indicates context should cancel (Pull() should return cancelation error).
-	CancelWithinPullCall
-	DeferCancelFromPullCall   // Pull() will return dummy data with nil error, but cancel context in defer.
-	ExpectCloseAfterPull      // Expect Close to be called after return from Pull()
-	ExpectPredicateCall       // Expect Predicate to be called (if there is one)
-	CancelWithinPredicateCall // Predicate will cancel context (by calling predicateLambda).
-	ExpectCloseAfterPredicate // Expect Close() to be called after predicate
+	PreCancelContext          ErrorTestBehaviorFlags = 1 << iota // Cancel context before starting test
+	ExpectCloseInsteadOfPull                                     // Expect Close() to be called instead of Pull()
+	ExpectPullCall                                               // Expect Pull() to be called
+	CancelWithinPullCall                                         // Expect context to be canceled during Pull()
+	DeferCancelFromPullCall                                      // Cancel context in a defer after returning from Pull()
+	ExpectCloseAfterPull                                         // Expect Close to be called after Pull()
+	ExpectPredicateCall                                          // Expect predicate function to be called
+	CancelWithinPredicateCall                                    // Predicate cancels context
+	ExpectCloseAfterPredicate                                    // Expect Close() to be called after predicate
 )
 
 type emittedLambdas struct {
@@ -192,7 +202,9 @@ type errorTestCase struct {
 	needPredicate     bool
 }
 
-//nolint:funlen,gocognit,cyclop // **FIXME**
+// getErrorTestCases returns a list of test cases for error handling behaviors.
+//
+//nolint:funlen,gocognit,cyclop // test scaffolding
 func getErrorTestCases(t *testing.T) []errorTestCase {
 	t.Helper()
 
@@ -205,6 +217,7 @@ func getErrorTestCases(t *testing.T) []errorTestCase {
 			testName := t.Name()
 			cancelableCtx, cancel := context.WithCancel(context.Background())
 			finalCtx := context.WithValue(cancelableCtx, contextKeyTestName{}, testName)
+
 			pullCallCount := 0
 			closeCallCount := 0
 			predicateCallCount := 0
@@ -226,11 +239,11 @@ func getErrorTestCases(t *testing.T) []errorTestCase {
 						cancel()
 					}
 
-					defer (func() {
+					defer func() {
 						if flags&DeferCancelFromPullCall != 0 {
 							cancel()
 						}
-					})()
+					}()
 
 					pullCallCount++
 					if pullCallCount > 1 {
@@ -246,7 +259,7 @@ func getErrorTestCases(t *testing.T) []errorTestCase {
 					}
 
 					if pullCallCount+closeCallCount+predicateCallCount > 16 {
-						t.Fatalf("Runaway execution detected Pull().")
+						t.Fatalf("Runaway execution detected in Pull().")
 					}
 
 					anyTestName := ctx.Value(contextKeyTestName{})
@@ -268,7 +281,6 @@ func getErrorTestCases(t *testing.T) []errorTestCase {
 					}
 
 					closeCallCount++
-
 					if closeCallCount > 1 {
 						t.Errorf("Close() unexpectedly called %d times (more than one).", closeCallCount)
 					}
@@ -277,7 +289,6 @@ func getErrorTestCases(t *testing.T) []errorTestCase {
 				},
 				predicateLambda: func() {
 					predicateCallCount++
-
 					if predicateCallCount > 1 {
 						t.Errorf("predicate unexpectedly called %d times (more than one).", predicateCallCount)
 					}
@@ -291,16 +302,15 @@ func getErrorTestCases(t *testing.T) []errorTestCase {
 					if flags&(ExpectCloseInsteadOfPull|ExpectCloseAfterPull|ExpectCloseAfterPredicate) != 0 {
 						expectedCloseCalls = 1
 					}
+
 					if closeCallCount != expectedCloseCalls {
 						t.Errorf("Close() called %d times when %d expected", closeCallCount, expectedCloseCalls)
 					}
 
-					// Ensure we actually called Pull() if ExpectPullCall is set.
 					if flags&ExpectPullCall != 0 && pullCallCount == 0 {
 						t.Errorf("Expected Pull() call but none was made")
 					}
 
-					// Ensure we actually called Predicate if ExpectPredicateCall is set.
 					if flags&ExpectPredicateCall != 0 && predicateCallCount == 0 {
 						t.Errorf("Expected predicate call but none was made")
 					}
@@ -368,13 +378,15 @@ func getErrorTestCases(t *testing.T) []errorTestCase {
 	}
 }
 
+// sinkOutputTestCase represents a test case for sink-like behaviors
+// such as SliceSink and Reducer.
 type sinkOutputTestCase[T any] struct {
-	name string
-	// returning any, because we only care about nil-ness
+	name         string
 	generator    func(context.Context, stream.Source[T], func()) (any, error)
 	hasPredicate bool
 }
 
+// getSinkOutputTestCase returns test sink behaviors (SliceSink, Reducer, etc.).
 func getSinkOutputTestCase() []sinkOutputTestCase[int] {
 	return []sinkOutputTestCase[int]{
 		{
@@ -394,6 +406,7 @@ func getSinkOutputTestCase() []sinkOutputTestCase[int] {
 					nil,
 					func(acc []int, next int) []int {
 						inPredicate()
+
 						if acc == nil {
 							acc = []int{0}
 						}
@@ -415,8 +428,9 @@ func TestSinkErrorHandling(t *testing.T) {
 
 	for _, tCase := range CartesianProduct(getErrorTestCases(t), getSinkOutputTestCase()) {
 		testCase := tCase
+
 		if testCase.First.needPredicate && !testCase.Second.hasPredicate {
-			continue // Invalid test
+			continue // Invalid test combination
 		}
 
 		t.Run(fmt.Sprintf("%s %s", testCase.Second.name, testCase.First.name), func(t *testing.T) {
@@ -424,6 +438,7 @@ func TestSinkErrorHandling(t *testing.T) {
 
 			lambdas := testCase.First.lambdaEmitter(t)
 			outerCtx := lambdas.ctxGen()
+
 			source := &rawSourceFunc[int]{
 				srcFunc:   lambdas.pullLambda,
 				closeFunc: lambdas.closeLambda,
@@ -439,7 +454,8 @@ func TestSinkErrorHandling(t *testing.T) {
 				return
 			}
 
-			if !(reflect.ValueOf(val).IsNil()) {
+			// We expect an error
+			if !reflect.ValueOf(val).IsNil() {
 				if err == nil {
 					t.Errorf("Got non-nil value %v when error expected", val)
 				} else {
@@ -452,13 +468,17 @@ func TestSinkErrorHandling(t *testing.T) {
 	}
 }
 
+// transformerOutputTestCase represents a test case for transformer-like behaviors
+// such as Mapper, Filter, Taker, etc.
 type transformerOutputTestCase[T any] struct {
 	name         string
 	generator    func(stream.Source[T], context.Context, func()) func() (*T, error)
 	hasPredicate bool
 }
 
-//nolint:funlen // **FIXME**
+// getTransformerIntOutputTestCase returns test cases for integer-based transformers.
+//
+//nolint:funlen // test code
 func getTransformerIntOutputTestCase() []transformerOutputTestCase[int] {
 	return []transformerOutputTestCase[int]{
 		{
@@ -551,6 +571,7 @@ func getTransformerIntOutputTestCase() []transformerOutputTestCase[int] {
 
 					return append(acc, next), nil
 				}
+
 				transformer := stream.NewReduceTransformer(src, reducer)
 
 				return func() (*int, error) {
@@ -579,6 +600,7 @@ func TestTransformerErrorHandling(t *testing.T) {
 
 	for _, tCase := range CartesianProduct(getErrorTestCases(t), getTransformerIntOutputTestCase()) {
 		testCase := tCase
+
 		if testCase.First.needPredicate && !testCase.Second.hasPredicate {
 			continue // Invalid test
 		}
@@ -592,6 +614,7 @@ func TestTransformerErrorHandling(t *testing.T) {
 
 			lambdas := testCase.First.lambdaEmitter(t)
 			outerCtx := lambdas.ctxGen()
+
 			source := &rawSourceFunc[int]{
 				srcFunc:   lambdas.pullLambda,
 				closeFunc: lambdas.closeLambda,
@@ -629,7 +652,7 @@ func TestSourceFuncCancelCtx(t *testing.T) {
 				t.Errorf("context %v should not yet be canceled; got %v", ctx, ctxErr)
 			}
 
-			defer cancel() // cancel context on exit
+			defer cancel()
 
 			outVal := 1
 
@@ -645,10 +668,6 @@ func TestSourceFuncCancelCtx(t *testing.T) {
 			return nil
 		},
 	)
-
-	if sourceClosed {
-		t.Errorf("source should not be closed yet")
-	}
 
 	resultPtr, outErr := source.Pull(ctx)
 
@@ -670,7 +689,6 @@ type rawSourceFunc[T any] struct {
 }
 
 // Pull calls the underlying source function to retrieve the next element.
-// It returns an error if the context is canceled or the source is exhausted.
 func (rsf *rawSourceFunc[T]) Pull(ctx context.Context) (*T, error) {
 	return rsf.srcFunc(ctx)
 }
@@ -680,7 +698,7 @@ func (rsf *rawSourceFunc[T]) Close() error {
 	return rsf.closeFunc()
 }
 
-// HelperCancelCtxOnPull tests cancellation of a context while something from a source.
+// HelperCancelCtxOnPull tests cancellation of a context from a given puller factory.
 func HelperCancelCtxOnPull[TOut any](
 	t *testing.T,
 	pullerFactory func(src stream.Source[int]) func(ctx context.Context) (*TOut, error),
@@ -696,10 +714,9 @@ func HelperCancelCtxOnPull[TOut any](
 				t.Errorf("context %v should not yet be canceled; got %v", ctx, ctxErr)
 			}
 
-			defer cancel() // cancel context on exit
+			defer cancel()
 
 			outVal := 1
-
 			if sourceClosed {
 				t.Errorf("source should not be closed yet")
 			}
@@ -714,10 +731,6 @@ func HelperCancelCtxOnPull[TOut any](
 	}
 
 	puller := pullerFactory(source)
-
-	if sourceClosed {
-		t.Errorf("source should not be closed yet")
-	}
 
 	resultPtr, outErr := puller(ctx)
 
@@ -738,11 +751,10 @@ func TestSliceSinkCancelCtx(t *testing.T) {
 
 	HelperCancelCtxOnPull(t, func(src stream.Source[int]) func(ctx context.Context) (*[]int, error) {
 		destSlice := make([]int, 0, 4)
-
-		slicesink := stream.NewSliceSink[int](&destSlice)
+		sink := stream.NewSliceSink[int](&destSlice)
 
 		return func(ctx context.Context) (*[]int, error) {
-			return slicesink.Append(ctx, src)
+			return sink.Append(ctx, src)
 		}
 	})
 }
@@ -752,7 +764,9 @@ func TestMapperCancelCtx(t *testing.T) {
 	t.Parallel()
 
 	HelperCancelCtxOnPull(t, func(src stream.Source[int]) func(ctx context.Context) (*int, error) {
-		mapper := stream.NewMapper(src, func(a int) int { return a })
+		mapper := stream.NewMapper(src, func(a int) int {
+			return a
+		})
 
 		return func(ctx context.Context) (*int, error) {
 			return mapper.Pull(ctx)
@@ -765,7 +779,9 @@ func TestFilterCancelCtx(t *testing.T) {
 	t.Parallel()
 
 	HelperCancelCtxOnPull(t, func(src stream.Source[int]) func(ctx context.Context) (*int, error) {
-		filter := stream.NewFilter(src, func(_ int) bool { return true })
+		filter := stream.NewFilter(src, func(_ int) bool {
+			return true
+		})
 
 		return func(ctx context.Context) (*int, error) {
 			return filter.Pull(ctx)
@@ -786,14 +802,16 @@ func TestTakerCancelCtx(t *testing.T) {
 	})
 }
 
-// TestReduceTransformerCancelCtx tests cancellation of a context while ReduceTransformer pulls from its source.
+// TestReduceTransformerCancelCtx tests cancellation of a context while ReduceTransformer pulls.
 func TestReduceTransformerCancelCtx(t *testing.T) {
 	t.Parallel()
 
 	HelperCancelCtxOnPull(t, func(src stream.Source[int]) func(ctx context.Context) (*int, error) {
 		reduceTransformer := stream.NewReduceTransformer(
 			src,
-			func(last []int, next int) ([]int, []int) { return append(last, next), []int{} },
+			func(last []int, next int) ([]int, []int) {
+				return append(last, next), []int{}
+			},
 		)
 
 		return func(ctx context.Context) (*int, error) {
@@ -807,7 +825,9 @@ func TestReducerCancelCtx(t *testing.T) {
 	t.Parallel()
 
 	HelperCancelCtxOnPull(t, func(src stream.Source[int]) func(ctx context.Context) (*int, error) {
-		reducer := stream.NewReducer[int, int](0, func(acc int, next int) int { return acc + next })
+		reducer := stream.NewReducer[int, int](0, func(acc, next int) int {
+			return acc + next
+		})
 
 		return func(ctx context.Context) (*int, error) {
 			val, err := reducer.Reduce(ctx, src)
@@ -816,7 +836,7 @@ func TestReducerCancelCtx(t *testing.T) {
 				t.Errorf("val should be 0, but was %v", val)
 			}
 
-			return nil, err //nolint:wrapcheck // mock
+			return nil, err //nolint: wrapcheck // for testing
 		}
 	})
 }
@@ -830,6 +850,7 @@ func TestNewDropperBasic(t *testing.T) {
 	dropper := stream.NewDropper(source, 3) // Skip the first 3 elements
 
 	expected := []int{4, 5, 6, 7}
+
 	for _, exp := range expected {
 		value, err := dropper.Pull(context.Background())
 		if err != nil {
@@ -859,7 +880,7 @@ type Pair[A, B any] struct {
 	Second B
 }
 
-// CartesianProduct generates the Cartesian product of two slices and returns a slice of Pair structs.
+// CartesianProduct generates the Cartesian product of two slices.
 func CartesianProduct[A, B any](a []A, b []B) []Pair[A, B] {
 	result := make([]Pair[A, B], 0, len(a)*len(b))
 
@@ -872,7 +893,7 @@ func CartesianProduct[A, B any](a []A, b []B) []Pair[A, B] {
 	return result
 }
 
-// assertError validates that `got` is the error we `want`.
+// assertError validates that `got` matches `want` via errors.Is.
 func assertError(t *testing.T, got, want error) {
 	t.Helper()
 
@@ -880,36 +901,37 @@ func assertError(t *testing.T, got, want error) {
 		if got != nil {
 			t.Errorf("expected no error, got %v", got)
 		}
-	} else {
-		if !errors.Is(got, want) {
-			t.Errorf("expected error %v, got %v", want, got)
-		}
+
+		return
+	}
+
+	if !errors.Is(got, want) {
+		t.Errorf("expected error %v, got %v", want, got)
 	}
 }
 
-// assertErrorString validates that `got` is the error we `want`.
+// assertErrorString checks for error equality or wrapping by comparing error messages.
 func assertErrorString(t *testing.T, got, want error) {
 	t.Helper()
 
-	//nolint:nestif // *FIXME*: for now
-	if want == nil {
-		if got != nil {
-			t.Errorf("expected no error, got %#v", got)
-		}
-	} else {
-		if !errors.Is(got, want) {
-			if (got == nil) || (got.Error() != want.Error()) {
-				t.Errorf("expected error \n\t%#v, got \n\t%#v", want, got)
-			}
+	switch {
+	case want == nil && got != nil:
+		t.Errorf("expected no error, got %#v", got)
+	case want == nil && got == nil:
+		// OK, no error expected and got no error
+	case want != nil && !errors.Is(got, want):
+		if got == nil || got.Error() != want.Error() {
+			t.Errorf("expected error \n\t%#v, got \n\t%#v", want, got)
 		}
 	}
 }
 
-//nolint:funlen // **FIXME**
+// TestTakerCloseOnEOF verifies that Taker closes its source after reaching the item limit or EOF.
+//
+//nolint:funlen // test code
 func TestTakerCloseOnEOF(t *testing.T) {
 	t.Parallel()
 
-	// Define mockSourceData to track Close() calls.
 	type mockSourceData struct {
 		items      []int
 		closed     bool
@@ -917,7 +939,6 @@ func TestTakerCloseOnEOF(t *testing.T) {
 		closeCalls int
 	}
 
-	// Create a mock source with 5 items
 	mockData := &mockSourceData{
 		items:      []int{1, 2, 3, 4, 5},
 		closed:     false,
@@ -952,12 +973,9 @@ func TestTakerCloseOnEOF(t *testing.T) {
 		},
 	}
 
-	// Create a Taker that limits to 3 items
 	taker := stream.NewTaker(mock, 3)
-
 	ctx := context.Background()
 
-	// Pull items and verify outputs
 	expectedItems := []int{1, 2, 3}
 	for _, expected := range expectedItems {
 		item, err := taker.Pull(ctx)
@@ -970,10 +988,8 @@ func TestTakerCloseOnEOF(t *testing.T) {
 		}
 	}
 
-	// Verify taker emits EOF and calls Close() on the source
 	item, err := taker.Pull(ctx)
-
-	if !errors.Is(err, io.EOF) { // Correctly check for EOF with errors.Is
+	if !errors.Is(err, io.EOF) {
 		t.Fatalf("expected EOF, got %v", err)
 	}
 
@@ -981,7 +997,6 @@ func TestTakerCloseOnEOF(t *testing.T) {
 		t.Fatalf("expected nil, got %v", item)
 	}
 
-	// Check if the mock source Close() was called exactly once
 	if !mockData.closed {
 		t.Fatalf("source was not closed")
 	}
@@ -1006,40 +1021,40 @@ func (we wrappedError) Unwrap() error {
 
 var errOriginal = errors.New("original error")
 
+// TestSourceFuncErrorWrapping verifies that SourceFunc properly handles wrapped errors.
 func TestSourceFuncErrorWrapping(t *testing.T) {
 	t.Parallel()
 
-	// Create a SourceFunc with a srcFunc that wraps its error.
-	src := stream.SourceFunc(func(_ context.Context) (*int, error) {
-		return nil, wrappedError{inner: errOriginal}
-	}, nil)
+	src := stream.SourceFunc(
+		func(_ context.Context) (*int, error) {
+			return nil, wrappedError{inner: errOriginal}
+		},
+		nil,
+	)
 
-	// Call Pull and assert behavior
 	item, err := src.Pull(context.Background())
 
-	// Ensure no item is returned
 	if item != nil {
 		t.Fatalf("expected item to be nil, got %v", item)
 	}
 
-	// Ensure an error is returned
 	if err == nil {
 		t.Fatal("expected an error, got nil")
 	}
 
-	// Ensure the error is of type wrappedError
 	var we wrappedError
 	if !errors.As(err, &we) {
 		t.Fatalf("expected error to be of type wrappedError, got %T", err)
 	}
 
-	// Ensure the error wraps the original error
 	if !errors.Is(err, errOriginal) {
 		t.Fatalf("expected error to wrap errOriginal, but it did not")
 	}
 }
 
-//nolint:funlen,gocognit // **FIXME**
+// TestNewTakeAndDropWhile tests the behavior of TakeWhile and DropWhile.
+//
+//nolint:funlen,gocognit // test code
 func TestNewTakeAndDropWhile(t *testing.T) {
 	t.Parallel()
 
@@ -1089,18 +1104,15 @@ func TestNewTakeAndDropWhile(t *testing.T) {
 
 	for testablesIdxLoop, testablesCaseLoop := range testables {
 		for _, tcLoop := range tests {
-			// Shadow copies:
 			testablesIdx := testablesIdxLoop
 			testablesCase := testablesCaseLoop
-			testcCase := tcLoop
+			testCase := tcLoop
 
-			t.Run(strings.Join([]string{testablesCase.name, testcCase.name}, " "), func(t *testing.T) {
+			t.Run(strings.Join([]string{testablesCase.name, testCase.name}, " "), func(t *testing.T) {
 				t.Parallel()
 
-				// Create a source and the SUT transformer
-				source := stream.NewSliceSource(testcCase.input)
-				sysUnderTest := testablesCase.underTest(source, testcCase.predicate)
-
+				source := stream.NewSliceSource(testCase.input)
+				sysUnderTest := testablesCase.underTest(source, testCase.predicate)
 				ctx := context.Background()
 
 				var result []int
@@ -1120,8 +1132,8 @@ func TestNewTakeAndDropWhile(t *testing.T) {
 					}
 				}
 
-				if !equalSlices(result, testcCase.expected[testablesIdx]) {
-					t.Fatalf("expected %v, got %v", testcCase.expected[testablesIdx], result)
+				if !equalSlices(result, testCase.expected[testablesIdx]) {
+					t.Fatalf("expected %v, got %v", testCase.expected[testablesIdx], result)
 				}
 
 				item, err := sysUnderTest.Pull(ctx)
@@ -1137,7 +1149,7 @@ var errTestCloseError = errors.New("test close error")
 
 // TestSourceCloseError validates error propagation from Close() in SourceFunc.
 //
-//nolint:funlen // **FIXME**
+//nolint:funlen // test code
 func TestSourceCloseError(t *testing.T) {
 	t.Parallel()
 
@@ -1180,11 +1192,14 @@ func TestSourceCloseError(t *testing.T) {
 		{
 			name: "Mapper",
 			srcGen: func(fn1 func(), fn2 func(), ip *int, err error) stream.Source[int] {
-				return stream.NewMapper(mockGen(fn1, ip, err), func(v int) int {
-					fn2()
+				return stream.NewMapper(
+					mockGen(fn1, ip, err),
+					func(v int) int {
+						fn2()
 
-					return v + 1
-				})
+						return v + 1
+					},
+				)
 			},
 			eofImpliesClosed: true,
 			hasPredicate:     true,
@@ -1192,11 +1207,14 @@ func TestSourceCloseError(t *testing.T) {
 		{
 			name: "Filter",
 			srcGen: func(fn1 func(), fn2 func(), ip *int, err error) stream.Source[int] {
-				return stream.NewFilter(mockGen(fn1, ip, err), func(_ int) bool {
-					fn2()
+				return stream.NewFilter(
+					mockGen(fn1, ip, err),
+					func(_ int) bool {
+						fn2()
 
-					return true
-				})
+						return true
+					},
+				)
 			},
 			eofImpliesClosed: true,
 			hasPredicate:     true,
@@ -1204,11 +1222,14 @@ func TestSourceCloseError(t *testing.T) {
 		{
 			name: "TakeWhile",
 			srcGen: func(fn1 func(), fn2 func(), ip *int, err error) stream.Source[int] {
-				return stream.NewTakeWhile(mockGen(fn1, ip, err), func(_ int) bool {
-					fn2()
+				return stream.NewTakeWhile(
+					mockGen(fn1, ip, err),
+					func(_ int) bool {
+						fn2()
 
-					return true
-				})
+						return true
+					},
+				)
 			},
 			eofImpliesClosed: true,
 			hasPredicate:     true,
@@ -1216,11 +1237,14 @@ func TestSourceCloseError(t *testing.T) {
 		{
 			name: "ReduceTransformer",
 			srcGen: func(fn1 func(), fn2 func(), ip *int, err error) stream.Source[int] {
-				return stream.NewReduceTransformer(mockGen(fn1, ip, err), func(acc []int, next int) ([]int, []int) {
-					fn2()
+				return stream.NewReduceTransformer(
+					mockGen(fn1, ip, err),
+					func(acc []int, next int) ([]int, []int) {
+						fn2()
 
-					return append(acc, next), nil
-				})
+						return append(acc, next), nil
+					},
+				)
 			},
 			eofImpliesClosed: true,
 			hasPredicate:     true,
@@ -1240,36 +1264,33 @@ func TestSourceCloseError(t *testing.T) {
 	for _, ts := range testSources {
 		testSrc := ts
 
-		t.Run((testSrc.name + ": Error closing after EOF"), func(t *testing.T) {
+		t.Run(testSrc.name+": Error closing after EOF", func(t *testing.T) {
 			t.Parallel()
 
 			source := testSrc.srcGen(func() {}, func() {}, nil, io.EOF)
-
-			// Pull should trigger Close() since it returns EOF
 			val, err := source.Pull(context.Background())
+
 			if val != nil {
 				t.Errorf("expected nil value, got %v", val)
 			}
 
-			// Error should be wrapped
+			// If EOF implies the source is closed internally,
+			// the caller sees only EOF, not a close error.
 			expectedWrappedErr := fmt.Errorf(
 				"error closing source: %w",
-				errors.Join(fmt.Errorf("error closing source: %w", errTestCloseError), io.EOF))
+				errors.Join(fmt.Errorf("error closing source: %w", errTestCloseError), io.EOF),
+			)
 
 			if testSrc.eofImpliesClosed {
-				// Instead, we're testing that the Pull() caller received the EOF, assumed
-				// the Source[T] was already closed, so didn't call Close() again, and
-				// didn't emit the error.
 				expectedWrappedErr = io.EOF
 			}
 
 			assertErrorString(t, err, expectedWrappedErr)
 		})
 
-		t.Run((testSrc.name + ": Error closing after canceled context"), func(t *testing.T) {
+		t.Run(testSrc.name+": Error closing after canceled context", func(t *testing.T) {
 			t.Parallel()
 
-			// Pull should trigger Close() since it cancels the context
 			cancelableCtx, cancel := context.WithCancel(context.Background())
 			source := testSrc.srcGen(cancel, func() {}, nil, io.EOF)
 
@@ -1278,19 +1299,18 @@ func TestSourceCloseError(t *testing.T) {
 				t.Errorf("expected nil value, got %v", val)
 			}
 
-			// Error should be wrapped
 			expectedWrappedErr := fmt.Errorf(
 				"error closing source while canceling: %w",
-				errors.Join(fmt.Errorf("error closing source: %w", errTestCloseError), context.Canceled))
+				errors.Join(fmt.Errorf("error closing source: %w", errTestCloseError), context.Canceled),
+			)
+
 			assertErrorString(t, err, expectedWrappedErr)
 		})
 
-		t.Run((testSrc.name + ": Error closing after precanceled context"), func(t *testing.T) {
+		t.Run(testSrc.name+": Error closing after precanceled context", func(t *testing.T) {
 			t.Parallel()
 
-			// Pull should trigger Close() since it cancels the context
 			cancelableCtx, cancel := context.WithCancel(context.Background())
-
 			cancel()
 
 			source := testSrc.srcGen(func() {}, func() {}, nil, io.EOF)
@@ -1300,18 +1320,18 @@ func TestSourceCloseError(t *testing.T) {
 				t.Errorf("expected nil value, got %v", val)
 			}
 
-			// Error should be wrapped
 			expectedWrappedErr := fmt.Errorf(
 				"error closing source while canceling: %w",
-				errors.Join(fmt.Errorf("error closing source: %w", errTestCloseError), context.Canceled))
+				errors.Join(fmt.Errorf("error closing source: %w", errTestCloseError), context.Canceled),
+			)
+
 			assertErrorString(t, err, expectedWrappedErr)
 		})
 
 		if testSrc.hasPredicate {
-			t.Run((testSrc.name + ": Error closing after canceled context in predicate"), func(t *testing.T) {
+			t.Run(testSrc.name+": Error closing after canceled context in predicate", func(t *testing.T) {
 				t.Parallel()
 
-				// Pull should trigger Close() since it cancels the context
 				cancelableCtx, cancel := context.WithCancel(context.Background())
 				source := testSrc.srcGen(func() {}, cancel, &one, nil)
 
@@ -1320,39 +1340,44 @@ func TestSourceCloseError(t *testing.T) {
 					t.Errorf("expected nil value, got %v", val)
 				}
 
-				// Error should be wrapped
 				expectedWrappedErr := fmt.Errorf(
 					"error closing source while canceling: %w",
-					errors.Join(fmt.Errorf("error closing source: %w", errTestCloseError), context.Canceled))
+					errors.Join(fmt.Errorf("error closing source: %w", errTestCloseError), context.Canceled),
+				)
+
 				assertErrorString(t, err, expectedWrappedErr)
 			})
 		}
 
-		t.Run((testSrc.name + ": Error directly closing"), func(t *testing.T) {
+		t.Run(testSrc.name+": Error directly closing", func(t *testing.T) {
 			t.Parallel()
 
 			source := testSrc.srcGen(func() {}, func() {}, nil, io.EOF)
-
-			// Call Close directly
 			err := source.Close()
-			expectedDirectErr := fmt.Errorf("error closing source: %w", errTestCloseError)
+
+			expectedDirectErr := fmt.Errorf(
+				"error closing source: %w",
+				errTestCloseError,
+			)
+
 			assertErrorString(t, err, expectedDirectErr)
 		})
 	}
 }
 
+// TestPreCanceledSliceSource ensures pre-canceled context returns the appropriate error.
 func TestPreCanceledSliceSource(t *testing.T) {
 	t.Parallel()
 
 	data := []int{1, 2, 3, 4, 5}
 	source := stream.NewSliceSource(data)
-	cancelableCtx, cancel := context.WithCancel(context.Background())
-	expectedError := fmt.Errorf("operation canceled: %w", context.Canceled)
 
+	cancelableCtx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	val, err := source.Pull(cancelableCtx)
+	expectedError := fmt.Errorf("operation canceled: %w", context.Canceled)
 
+	val, err := source.Pull(cancelableCtx)
 	if val != nil {
 		t.Errorf("expected nil, got %v", val)
 	}
@@ -1360,6 +1385,7 @@ func TestPreCanceledSliceSource(t *testing.T) {
 	assertErrorString(t, err, expectedError)
 }
 
+// TestTakerTerminationCloseErr checks behavior when Taker closes source with an error.
 func TestTakerTerminationCloseErr(t *testing.T) {
 	t.Parallel()
 
@@ -1373,13 +1399,15 @@ func TestTakerTerminationCloseErr(t *testing.T) {
 			return errTestCloseError
 		},
 	}
+
 	taker := stream.NewTaker(source, 0)
+
 	expectedErr := fmt.Errorf(
 		"error closing source: %w",
 		errors.Join(fmt.Errorf("error closing source: %w", errTestCloseError), io.EOF),
 	)
-	val, err := taker.Pull(context.Background())
 
+	val, err := taker.Pull(context.Background())
 	if val != nil {
 		t.Errorf("expected nil, got %v", val)
 	}
@@ -1387,6 +1415,7 @@ func TestTakerTerminationCloseErr(t *testing.T) {
 	assertErrorString(t, err, expectedErr)
 }
 
+// TestPreCanceledSinkCloseErr checks behavior when a sink closes a pre-canceled context.
 func TestPreCanceledSinkCloseErr(t *testing.T) {
 	t.Parallel()
 
@@ -1400,22 +1429,22 @@ func TestPreCanceledSinkCloseErr(t *testing.T) {
 			return errTestCloseError
 		},
 	}
-	cancelableCtx, cancel := context.WithCancel(context.Background())
-	// expectedError := fmt.Errorf("operation canceled: %w", context.Canceled)
 
+	cancelableCtx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	t.Run(("SliceSink"), func(t *testing.T) {
+	t.Run("SliceSink", func(t *testing.T) {
 		t.Parallel()
 
 		dummyDest := []int{}
 		sink := stream.NewSliceSink(&dummyDest)
+
 		expectedError := fmt.Errorf(
 			"error closing source while canceling: %w",
 			errors.Join(errTestCloseError, context.Canceled),
 		)
-		val, err := sink.Append(cancelableCtx, source)
 
+		val, err := sink.Append(cancelableCtx, source)
 		if val != nil {
 			t.Errorf("expected nil, got %v", val)
 		}
@@ -1423,16 +1452,19 @@ func TestPreCanceledSinkCloseErr(t *testing.T) {
 		assertErrorString(t, err, expectedError)
 	})
 
-	t.Run(("Reducer"), func(t *testing.T) {
+	t.Run("Reducer", func(t *testing.T) {
 		t.Parallel()
 
-		sink := stream.NewReducer(0, func(acc, next int) int { return acc + next })
+		sink := stream.NewReducer(0, func(acc, next int) int {
+			return acc + next
+		})
+
 		expectedError := fmt.Errorf(
 			"error closing source while canceling: %w",
 			errors.Join(errTestCloseError, context.Canceled),
 		)
-		val, err := sink.Reduce(cancelableCtx, source)
 
+		val, err := sink.Reduce(cancelableCtx, source)
 		if val != 0 {
 			t.Errorf("expected nil, got %v", val)
 		}
@@ -1441,7 +1473,7 @@ func TestPreCanceledSinkCloseErr(t *testing.T) {
 	})
 }
 
-// Helper function to compare two slices for equality.
+// equalSlices is a helper function to compare two slices for equality.
 func equalSlices[T comparable](left, right []T) bool {
 	if len(left) != len(right) {
 		return false
@@ -1461,9 +1493,17 @@ func ExampleReducer() {
 	data := []int{1, 2, 3, 4, 5}
 	source := stream.NewSliceSource(data)
 
-	mapper := stream.NewMapper(source, func(n int) int { return n * n })     // Square each number
-	filter := stream.NewFilter(mapper, func(n int) bool { return n%2 == 0 }) // Keep even squares
-	consumer := stream.NewReducer(0, func(acc, next int) int { return acc + next })
+	mapper := stream.NewMapper(source, func(n int) int {
+		return n * n
+	})
+
+	filter := stream.NewFilter(mapper, func(n int) bool {
+		return n%2 == 0
+	})
+
+	consumer := stream.NewReducer(0, func(acc, next int) int {
+		return acc + next
+	})
 
 	result, _ := consumer.Reduce(context.Background(), filter)
 	fmt.Println(result) // Output: 20
