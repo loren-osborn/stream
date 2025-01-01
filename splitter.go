@@ -81,7 +81,7 @@ func (s *Spooler[T]) Pull(ctx context.Context) (*T, error) {
 		case errors.Is(err, io.EOF):
 			s.input = nil // Source should have already closed itself
 			closeErr := s.Close()
-			assertf(closeErr == nil, "Close() with nil input always returns nil")
+			assertf(closeErr == nil, "Close() with nil s.input always returns nil")
 
 			return nil, io.EOF
 		default:
