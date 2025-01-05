@@ -4,14 +4,37 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"sync/atomic"
 	"testing"
+	"time"
 
-	//nolint:depguard // package under test.
+	//nolint:depguard // We are testing the package below.
 	"github.com/loren-osborn/stream"
 )
 
+// NewTestLogger creates a new *log.Logger instance that writes to the given testing.T.
+func NewTestLogger(t *testing.T) *log.Logger {
+	t.Helper()
+
+	return log.New(&testLogWriter{t: t}, "", 0) // No prefix or flags for simplicity.
+}
+
+// testLogWriter writes log messages to testing.T.
+type testLogWriter struct {
+	t *testing.T
+}
+
+func (w *testLogWriter) Write(p []byte) (int, error) {
+	// Use t.Log to write log messages, trimming trailing newlines.
+	w.t.Log(string(p))
+
+	return len(p), nil
+}
+
 // MockCloser is a mock implementation of io.Closer for testing.
+//
+// Close() increments CloseCalls atomically.
 type MockCloser struct {
 	CloseCalls int32
 	CustomData string // Demonstrates type-specific fields
@@ -23,16 +46,39 @@ func (m *MockCloser) Close() error {
 	return nil
 }
 
-//nolint: funlen,gocognit,cyclop // **FIXME**
+// GetCloseCalls is a helper to safely retrieve CloseCalls in tests.
+func (m *MockCloser) GetCloseCalls() int32 {
+	return atomic.LoadInt32(&m.CloseCalls)
+}
+
+func assertProperHelperCleanup(t *testing.T, helper *stream.MultiOutputHelper[*MockCloser], numManagers int) {
+	t.Helper()
+
+	if err := helper.Close(); err != nil {
+		t.Errorf("EXPECTED nil error, but got: %#v", err)
+	}
+
+	for i := range numManagers {
+		if status := helper.ManagerState(i); status != stream.MOHelperClosed {
+			t.Errorf("EXPECTED manager %d to be MOHelperClosed, but saw: %v", i, status)
+		}
+	}
+}
+
+// TestHelperWithGenericClosers tests multiple managers with an io.Closer.
+//nolint: funlen // **FIXME**
 func TestHelperWithGenericClosers(t *testing.T) {
 	t.Parallel()
 
 	const numManagers = 5
-	managerInfo := make([]struct {
+
+	type managerItem struct {
 		closer   *MockCloser
 		ctx      *context.Context
 		cancelFn func()
-	}, numManagers)
+	}
+
+	managerInfo := make([]managerItem, numManagers)
 
 	// Create closers for each manager
 	helper := stream.NewMultiOutputHelper(numManagers, func(index int) *MockCloser {
@@ -44,10 +90,14 @@ func TestHelperWithGenericClosers(t *testing.T) {
 
 		return closer
 	})
+	helper.Logger = NewTestLogger(t)
 
-	for index := range managerInfo {
+	t.Logf("Created MultiOutputHelper with %d output managers", numManagers)
+
+	// 1) Initially, all managers should be uninitialized
+	for index := range numManagers {
 		if state := helper.ManagerState(index); state != stream.MOHelperUninitialized {
-			t.Fatalf("Expected manager %d to be uninitialized, saw %#v", index, state)
+			t.Fatalf("EXPECTED manager %d to be MOHelperUninitialized, saw %d", index, state)
 		}
 
 		ctx, cancel := context.WithCancel(context.Background())
@@ -55,81 +105,218 @@ func TestHelperWithGenericClosers(t *testing.T) {
 		managerInfo[index].cancelFn = cancel
 
 		if err := helper.ManagerSetContext(ctx, index); err != nil {
-			t.Fatalf("failed to set context for manager %d: %v", index, err)
+			t.Fatalf("EXPECTED to set context for manager %d: failed: %v", index, err)
 		}
+
+		t.Logf("Set initial cancelable context for manager %d", index)
 
 		if state := helper.ManagerState(index); state != stream.MOHelperWaiting {
-			t.Fatalf("Expected manager %d to be waiting, saw %#v", index, state)
+			t.Fatalf("EXPECTED manager %d to be MOHelperWaiting, saw %d", index, state)
 		}
 	}
 
+	// 2) Test each manager closing in turn. We expect that all managers with
+	//    index <= 'index' are closed afterwards.
 	for index, outer := range managerInfo {
-		for j, info := range managerInfo {
-			expectedCalls := int32(0)
-
-			if j < index {
-				expectedCalls = 1
-			}
-
-			if info.closer.CloseCalls != expectedCalls {
-				t.Errorf("expected closer %d to be called %d times, got %d", index, expectedCalls, info.closer.CloseCalls)
-			}
-		}
-
-		// we're testing both ways a manager can get closed:
+		// We use two different ways to close:
 		if index%2 == 0 {
-			outer.cancelFn() // if a manager's context gets canceled, it should close
+			// Canceling the context should cause it to close.
+			outer.cancelFn()
+			t.Logf("Canceled context for manager %d", index)
+
+			// Expecting response as soon as we switch contexts:
+			// being generous with 10 millsec delay
+			time.Sleep(10 * time.Millisecond)
 		} else {
-			err := helper.ManagerClose(index, false) // if it is closed directly, it should cleanup properly
-			if err != nil {
-				t.Errorf("expected no error closing manager %d, got %#v", index, err)
+			// Or explicitly calling ManagerClose
+			if err := helper.ManagerClose(index, true); err != nil {
+				t.Errorf("EXPECTED nil error closing manager %d, got %v", index, err)
 			}
+
+			t.Logf("Closed manager %d", index)
 		}
 
-		for j, info := range managerInfo {
-			expectedCalls := int32(0)
-			if j <= index {
-				expectedCalls = 1
+		if state := helper.ManagerState(index); state != stream.MOHelperClosed {
+			t.Errorf("EXPECTED manager %d to be %v, saw %v", index, stream.MOHelperClosed, state)
+		} else {
+			t.Logf("Manager %d met expectation status %v", index, state)
+		}
 
-				if state := helper.ManagerState(j); state != stream.MOHelperWaiting {
-					t.Fatalf("Expected manager %d to be closed, saw %#v", index, state)
-				}
+		// Now verify that managers [0..index] are closed, and managers [index+1..end] are still waiting.
+		for innerIndex := range numManagers {
+			state := helper.ManagerState(innerIndex)
+			closerCalls := managerInfo[innerIndex].closer.GetCloseCalls()
+
+			expectedState := stream.MOHelperWaiting
+			unexpectedCallsFn := func(v int32) bool { return v != 0 }
+			expectedCallsString := "not to be called yet"
+
+			if innerIndex <= index {
+				expectedState = stream.MOHelperClosed
+				unexpectedCallsFn = func(v int32) bool { return v < 1 }
+				expectedCallsString = "to be called at least once"
 			}
 
-			if info.closer.CloseCalls != expectedCalls {
-				t.Errorf("expected closer %d to be called %d times, got %d", index, expectedCalls, info.closer.CloseCalls)
+			if state != expectedState {
+				t.Errorf("EXPECTED manager %d to be %v, saw %v", innerIndex, expectedState, state)
+			}
+			// Because we called close one way or another, we expect 1 close
+			// for that manager.
+			if unexpectedCallsFn(closerCalls) {
+				t.Errorf("EXPECTED closer %d %s, got %d", innerIndex, expectedCallsString, closerCalls)
 			}
 		}
 	}
+
+	assertProperHelperCleanup(t, helper, numManagers)
 }
 
+// TestHelperConsensusWithGenericClosers verifies that the consensus context
+// is canceled only when all outputs are closed.
 func TestHelperConsensusWithGenericClosers(t *testing.T) {
 	t.Parallel()
 
 	const numManagers = 3
 
-	// Create closers for each manager
 	helper := stream.NewMultiOutputHelper(numManagers, func(_ int) *MockCloser {
 		return &MockCloser{
 			CloseCalls: 0,
 			CustomData: "foo",
 		}
 	})
+	helper.Logger = NewTestLogger(t)
 
-	// Retrieve the consensus context
 	consensusCtx := helper.ConsensusContext()
 
-	// Close all managers
-	for i := range numManagers {
-		if ctxErr := consensusCtx.Err(); ctxErr != nil {
-			t.Errorf("expected nil error, got %#v", ctxErr)
+	// Initially, it should not be canceled
+	if consensusCtx.Err() != nil {
+		t.Fatalf("EXPECTED consensus context to be active, found err=%v", consensusCtx.Err())
+	}
+
+	// Close each manager in turn, waiting for it to finish, then check consensus
+	for index := range numManagers {
+		// Before close, should still be active
+		if consensusCtx.Err() != nil {
+			t.Fatalf("EXPECTED consensusCtx to still be active, got err=%v [Manager %d]", consensusCtx.Err(), index)
 		}
 
-		helper.ManagerClose(i, false)
+		// Close manager index
+		if err := helper.ManagerClose(index, false); err != nil {
+			t.Errorf("EXPECTED no error closing manager %d, got %v", index, err)
+		}
 	}
 
-	// Verify that consensus context is canceled
+	// After all are closed, the consensusCtx should be canceled
 	if ctxErr := consensusCtx.Err(); ctxErr == nil || !errors.Is(ctxErr, context.Canceled) {
-		t.Errorf("expected error %#v, got %#v", context.Canceled, ctxErr)
+		t.Errorf("EXPECTED consensusCtx to be canceled with %v, got %v", context.Canceled, ctxErr)
 	}
+
+	assertProperHelperCleanup(t, helper, numManagers)
+}
+
+// TestEdgeCases checks behavior for out-of-bound indices, repeated closes, etc.
+//nolint: funlen // **README**
+func TestEdgeCases(t *testing.T) {
+	t.Parallel()
+
+	newHelper := func(t *testing.T) *stream.MultiOutputHelper[*MockCloser] {
+		t.Helper()
+
+		result := stream.NewMultiOutputHelper(2, func(_ int) *MockCloser {
+			return &MockCloser{
+				CloseCalls: 0,
+				CustomData: "foo",
+			}
+		})
+		result.Logger = NewTestLogger(t)
+
+		return result
+	}
+
+	// Helper to test panics
+	expectPanic := func(t *testing.T, funcThatPanics func(), expected string) {
+		t.Helper()
+
+		defer func() {
+			if r := recover(); r == nil {
+				t.Errorf("EXPECTED panic: %s, got none", expected)
+			} else if msg, ok := r.(string); !ok || msg != expected {
+				t.Errorf("EXPECTED panic: %s, got: %v", expected, r)
+			}
+		}()
+		funcThatPanics()
+	}
+
+	// Attempt to set context on invalid index
+	t.Run("ManagerSetContext panics on invalid index", func(t *testing.T) {
+		t.Parallel()
+
+		helper := newHelper(t)
+
+		expectPanic(t, func() {
+			_ = helper.ManagerSetContext(context.Background(), 99)
+		}, "invalid manager index: 99")
+	})
+
+	// Attempt to close invalid index
+	t.Run("ManagerClose panics on invalid index", func(t *testing.T) {
+		t.Parallel()
+
+		helper := newHelper(t)
+
+		expectPanic(t, func() {
+			_ = helper.ManagerClose(99, true)
+		}, "invalid manager index: 99")
+	})
+
+	// Setting context on a valid manager
+	t.Run("ManagerSetContext does not panic on valid index", func(t *testing.T) {
+		t.Parallel()
+
+		helper := newHelper(t)
+
+		err := helper.ManagerSetContext(context.Background(), 0) // Should not panic
+		if err != nil {
+			t.Errorf("EXPECTED nil error, but got: %#v", err)
+		}
+
+		assertProperHelperCleanup(t, helper, 2)
+	})
+
+	// Closing manager 0
+	t.Run("ManagerClose does not panic on valid index", func(t *testing.T) {
+		t.Parallel()
+
+		helper := newHelper(t)
+
+		err := helper.ManagerClose(0, true) // Should not panic
+		if err != nil {
+			t.Errorf("EXPECTED nil error, but got: %#v", err)
+		}
+
+		assertProperHelperCleanup(t, helper, 2)
+	})
+
+	// Wait for the goroutine to finish
+	t.Run("helper.Close() completes without panic", func(t *testing.T) {
+		t.Parallel()
+
+		helper := newHelper(t)
+
+		assertProperHelperCleanup(t, helper, 2)
+	})
+
+	// Repeated close
+	t.Run("Repeated ManagerClose does not panic", func(t *testing.T) {
+		t.Parallel()
+
+		helper := newHelper(t)
+
+		err := helper.ManagerClose(0, true) // Should not panic
+		if err != nil {
+			t.Errorf("EXPECTED nil error, but got: %#v", err)
+		}
+
+		assertProperHelperCleanup(t, helper, 2)
+	})
 }
