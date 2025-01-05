@@ -128,32 +128,23 @@ func (moh *MultiOutputHelper[T]) startManagerGoroutine(initialCtx context.Contex
 		for {
 			select {
 			case <-currentCtx.Done():
-				// moh.Logger.Printf("cancel detected for output manager %d...", outputID)
 				curCancelFunc()
 				<-currentCtx.Done()
-				// moh.Logger.Printf("context Done channel clear for output manager %d...", outputID)
+
 				moh.markClosed(outputID)
 
 				return
 			case newCtx := <-moh.managers[outputID].ctxChan:
 				curCancelFunc()
 				<-currentCtx.Done()
-				// if newCtx == nil {
-				// 	moh.Logger.Printf("received request to close goroutine for output manager %d...", outputID)
-				// } else {
-				// 	moh.Logger.Printf("received new listening context for output manager %d...", outputID)
-				// }
 
 				if newCtx == nil {
 					// We interpret a closed channel or nil as a signal to close
 					moh.markClosed(outputID)
-					// moh.Logger.Printf("closing goroutine for output manager %d...", outputID)
 
 					return
 				}
 				// Switch to a new context
-
-				// moh.Logger.Printf("switching listening context for output manager %d...", outputID)
 
 				//nolint: fatcontext
 				currentCtx, curCancelFunc = context.WithCancel(newCtx)
