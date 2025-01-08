@@ -38,12 +38,13 @@ func (w *testLogWriter) Write(p []byte) (int, error) {
 type MockCloser struct {
 	CloseCalls int32
 	CustomData string // Demonstrates type-specific fields
+	ResultErr  error
 }
 
 func (m *MockCloser) Close() error {
 	atomic.AddInt32(&m.CloseCalls, 1)
 
-	return nil
+	return m.ResultErr
 }
 
 // GetCloseCalls is a helper to safely retrieve CloseCalls in tests.
@@ -66,7 +67,7 @@ func assertProperHelperCleanup(t *testing.T, helper *stream.MultiOutputHelper[*M
 }
 
 // TestHelperWithGenericClosers tests multiple managers with an io.Closer.
-//nolint: funlen // **FIXME**
+//nolint: funlen,gocognit,cyclop // **FIXME**
 func TestHelperWithGenericClosers(t *testing.T) {
 	t.Parallel()
 
@@ -85,6 +86,7 @@ func TestHelperWithGenericClosers(t *testing.T) {
 		closer := &MockCloser{
 			CloseCalls: 0,
 			CustomData: fmt.Sprintf("Manager %d", index),
+			ResultErr:  nil,
 		}
 		managerInfo[index].closer = closer
 
@@ -95,24 +97,30 @@ func TestHelperWithGenericClosers(t *testing.T) {
 	t.Logf("Created MultiOutputHelper with %d output managers", numManagers)
 
 	// 1) Initially, all managers should be uninitialized
-	for index := range numManagers {
-		if state := helper.ManagerState(index); state != stream.MOHelperUninitialized {
-			t.Fatalf("EXPECTED manager %d to be MOHelperUninitialized, saw %d", index, state)
+	expectedBeforeState := stream.MOHelperUninitialized
+
+	for range 2 {
+		for index := range numManagers {
+			if state := helper.ManagerState(index); state != expectedBeforeState {
+				t.Fatalf("EXPECTED manager %d to be %v, saw %v", index, expectedBeforeState, state)
+			}
+
+			ctx, cancel := context.WithCancel(context.Background())
+			managerInfo[index].ctx = &ctx
+			managerInfo[index].cancelFn = cancel
+
+			if err := helper.ManagerSetContext(ctx, index); err != nil {
+				t.Fatalf("EXPECTED to set context for manager %d: failed: %v", index, err)
+			}
+
+			t.Logf("Set initial cancelable context for manager %d", index)
+
+			if state := helper.ManagerState(index); state != stream.MOHelperWaiting {
+				t.Fatalf("EXPECTED manager %d to be MOHelperWaiting, saw %d", index, state)
+			}
 		}
-
-		ctx, cancel := context.WithCancel(context.Background())
-		managerInfo[index].ctx = &ctx
-		managerInfo[index].cancelFn = cancel
-
-		if err := helper.ManagerSetContext(ctx, index); err != nil {
-			t.Fatalf("EXPECTED to set context for manager %d: failed: %v", index, err)
-		}
-
-		t.Logf("Set initial cancelable context for manager %d", index)
-
-		if state := helper.ManagerState(index); state != stream.MOHelperWaiting {
-			t.Fatalf("EXPECTED manager %d to be MOHelperWaiting, saw %d", index, state)
-		}
+		// second iteration, expect MOHelperWaiting
+		expectedBeforeState = stream.MOHelperWaiting
 	}
 
 	// 2) Test each manager closing in turn. We expect that all managers with
@@ -182,6 +190,7 @@ func TestHelperConsensusWithGenericClosers(t *testing.T) {
 		return &MockCloser{
 			CloseCalls: 0,
 			CustomData: "foo",
+			ResultErr:  nil,
 		}
 	})
 	helper.Logger = NewTestLogger(t)
@@ -226,6 +235,7 @@ func TestEdgeCases(t *testing.T) {
 			return &MockCloser{
 				CloseCalls: 0,
 				CustomData: "foo",
+				ResultErr:  nil,
 			}
 		})
 		result.Logger = NewTestLogger(t)
@@ -256,6 +266,18 @@ func TestEdgeCases(t *testing.T) {
 		expectPanic(t, func() {
 			_ = helper.ManagerSetContext(context.Background(), 99)
 		}, "invalid manager index: 99")
+	})
+
+	// Attempt to set context on invalid index
+	t.Run("ManagerSetContext panics on nil context", func(t *testing.T) {
+		t.Parallel()
+
+		helper := newHelper(t)
+
+		expectPanic(t, func() {
+			//nolint: staticcheck // Explicitly testing nil context handling
+			_ = helper.ManagerSetContext(nil, 0)
+		}, "Attempting to set invalid nil context for outputID 0")
 	})
 
 	// Attempt to close invalid index
@@ -297,6 +319,25 @@ func TestEdgeCases(t *testing.T) {
 		assertProperHelperCleanup(t, helper, 2)
 	})
 
+	// Closing manager 0
+	t.Run("ManagerClose returnes wrapped error", func(t *testing.T) {
+		t.Parallel()
+
+		helper := newHelper(t)
+
+		(*helper.ManagerCloser(0)).ResultErr = errTestCloseError
+
+		err := helper.ManagerClose(0, true) // Should not panic
+		expectedWrappedErr := fmt.Errorf(
+			"error closing output: %w",
+			errTestCloseError,
+		)
+
+		assertErrorString(t, err, expectedWrappedErr)
+
+		assertProperHelperCleanup(t, helper, 2)
+	})
+
 	// Wait for the goroutine to finish
 	t.Run("helper.Close() completes without panic", func(t *testing.T) {
 		t.Parallel()
@@ -313,6 +354,12 @@ func TestEdgeCases(t *testing.T) {
 		helper := newHelper(t)
 
 		err := helper.ManagerClose(0, true) // Should not panic
+		if err != nil {
+			t.Errorf("EXPECTED nil error, but got: %#v", err)
+		}
+
+		// test that Set context after close also gives a nil error:
+		err = helper.ManagerSetContext(context.Background(), 0) // Should not panic
 		if err != nil {
 			t.Errorf("EXPECTED nil error, but got: %#v", err)
 		}

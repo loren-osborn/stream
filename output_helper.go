@@ -27,12 +27,13 @@ const (
 
 // OutputManager manages the cancelation of the context for a single output.
 type OutputManager[T io.Closer] struct {
-	mu            sync.RWMutex
-	state         MultiOutputHelperState
-	ctxChan       chan context.Context
-	closer        T
-	closedAlready bool
-	wGroup        sync.WaitGroup
+	mu                sync.RWMutex
+	state             MultiOutputHelperState
+	ctxChan           chan context.Context
+	closer            T
+	closerCallHandled bool
+	wGroup            sync.WaitGroup
+	closingErr        error
 }
 
 // MultiOutputHelper is a helper that assists with cancelation of multiple output Sources.
@@ -131,7 +132,7 @@ func (moh *MultiOutputHelper[T]) startManagerGoroutine(initialCtx context.Contex
 				curCancelFunc()
 				<-currentCtx.Done()
 
-				moh.markClosed(outputID)
+				moh.managers[outputID].closingErr = moh.markClosed(outputID)
 
 				return
 			case newCtx := <-moh.managers[outputID].ctxChan:
@@ -140,7 +141,7 @@ func (moh *MultiOutputHelper[T]) startManagerGoroutine(initialCtx context.Contex
 
 				if newCtx == nil {
 					// We interpret a closed channel or nil as a signal to close
-					moh.markClosed(outputID)
+					moh.managers[outputID].closingErr = moh.markClosed(outputID)
 
 					return
 				}
@@ -155,36 +156,53 @@ func (moh *MultiOutputHelper[T]) startManagerGoroutine(initialCtx context.Contex
 
 // markClosed sets the manager's state to MOHelperClosed, closes the closer (if any),
 // and checks whether the consensus context should be canceled.
-func (moh *MultiOutputHelper[T]) markClosed(outputID int) {
+func (moh *MultiOutputHelper[T]) markClosed(outputID int) error {
 	manager := &moh.managers[outputID]
 
-	alreadyClosed := func() bool {
+	alreadyClosed, callCloserBeforeReturn := func() (bool, bool) {
 		manager.mu.Lock()
 
 		defer manager.mu.Unlock()
 
 		if manager.state == MOHelperClosed {
-			return true
+			return true, false
 		}
 
 		manager.state = MOHelperClosed
 
-		return false
-	}
+		if manager.closerCallHandled {
+			return false, false
+		}
 
-	if alreadyClosed() {
-		return
+		manager.closerCallHandled = true
+
+		return false, true
+	}()
+
+	if alreadyClosed {
+		return nil
 	}
 
 	moh.updateConsensusCtx()
 
 	// Attempt to close the output's closer, if present.
-	if !manager.closedAlready {
-		manager.closedAlready = true
+	if callCloserBeforeReturn {
+		assertf(
+			manager.closingErr == nil,
+			"Close() should only be called once. It appears Close() was already "+
+				"called, and retured %v",
+			manager.closingErr,
+		)
+
 		if err := manager.closer.Close(); err != nil {
-			moh.Logger.Printf("error closing output: %v", err)
+			return fmt.Errorf(
+				"error closing output: %w",
+				err,
+			)
 		}
 	}
+
+	return nil
 }
 
 // ManagerClose closes context monitoring for outputID.
@@ -194,59 +212,88 @@ func (moh *MultiOutputHelper[T]) markClosed(outputID int) {
 // signals the manager goroutine to exit. This method returns nil on success.
 //
 // If callCloser is false, we reset manager.closer to nil to skip the final close call.
+//nolint: funlen // **FIXME**
 func (moh *MultiOutputHelper[T]) ManagerClose(outputID int, callCloser bool) error {
 	moh.validateOutputID(outputID)
 	manager := &moh.managers[outputID]
-	afterUnlock := func() {}
 
-	manager.mu.Lock()
-	deferFunc := func() {
-		manager.mu.Unlock()
-		afterUnlock()
+	atomicOps := func() (bool, MultiOutputHelperState) {
+		manager.mu.Lock()
+
+		defer manager.mu.Unlock()
+
+		switch manager.state {
+		case MOHelperClosed:
+			return false, MOHelperClosed
+		case MOHelperUninitialized:
+			manager.state = MOHelperClosed
+			callCloserBeforeReturn := callCloser && !manager.closerCallHandled
+			manager.closerCallHandled = true
+
+			return callCloserBeforeReturn, MOHelperUninitialized
+		case MOHelperWaiting:
+			fallthrough
+		default:
+			assertf(manager.state == MOHelperWaiting, "INTERNAL ERROR: Unhandled state %v", manager.state)
+			// The goroutine will exit once ctxChan is closed.
+			if !callCloser {
+				manager.closerCallHandled = true
+			}
+
+			close(manager.ctxChan)
+			// We do NOT directly set state here, because the goroutine
+			// will do it in markClosed().
+			return false, MOHelperWaiting
+		}
 	}
 
-	defer deferFunc()
+	callCloserNow, prevStatus := atomicOps()
 
-	switch manager.state {
+	switch prevStatus {
 	case MOHelperClosed:
 		return nil
 	case MOHelperUninitialized:
-		manager.state = MOHelperClosed
+		moh.updateConsensusCtx()
 
-		afterUnlock = func() {
-			moh.updateConsensusCtx()
+		if callCloserNow {
+			assertf(
+				moh.managers[outputID].closingErr == nil,
+				"Close() should only be called once. It appears Close() was already "+
+					"called, and retured %v",
+				manager.closingErr,
+			)
 
-			if !callCloser {
-				manager.closedAlready = true
-			}
-
-			if !manager.closedAlready {
-				manager.closedAlready = true
-				if err := manager.closer.Close(); err != nil {
-					moh.Logger.Printf("error closing output: %v", err)
-				}
+			if err := manager.closer.Close(); err != nil {
+				return fmt.Errorf("error closing output: %w", err)
 			}
 		}
 
+		return nil
 	case MOHelperWaiting:
-		// The goroutine will exit once ctxChan is closed.
-		if !callCloser {
-			manager.closedAlready = true
-		}
-
-		close(manager.ctxChan)
-		// We do NOT directly set state here, because the goroutine
-		// will do it in markClosed().
-
-		// but we have to wait for it:
-		afterUnlock = func() {
-			manager.wGroup.Wait()
-		}
-
+		fallthrough
 	default:
-	}
+		assertf(prevStatus == MOHelperWaiting, "INTERNAL ERROR: Unhandled state %v", prevStatus)
 
-	return nil
+		manager.wGroup.Wait()
+
+		return func() error {
+			manager.mu.Lock()
+
+			defer manager.mu.Unlock()
+
+			result := moh.managers[outputID].closingErr
+			moh.managers[outputID].closingErr = nil
+
+			return result
+		}()
+	}
+}
+
+// ManagerCloser returns the manager's closer.
+func (moh *MultiOutputHelper[T]) ManagerCloser(outputID int) *T {
+	moh.validateOutputID(outputID)
+
+	return &moh.managers[outputID].closer
 }
 
 // updateConsensusCtx checks if all Managers are closed, and if so, cancels the
