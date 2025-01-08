@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -12,25 +11,6 @@ import (
 	//nolint:depguard // We are testing the package below.
 	"github.com/loren-osborn/stream"
 )
-
-// NewTestLogger creates a new *log.Logger instance that writes to the given testing.T.
-func NewTestLogger(t *testing.T) *log.Logger {
-	t.Helper()
-
-	return log.New(&testLogWriter{t: t}, "", 0) // No prefix or flags for simplicity.
-}
-
-// testLogWriter writes log messages to testing.T.
-type testLogWriter struct {
-	t *testing.T
-}
-
-func (w *testLogWriter) Write(p []byte) (int, error) {
-	// Use t.Log to write log messages, trimming trailing newlines.
-	w.t.Log(string(p))
-
-	return len(p), nil
-}
 
 // MockCloser is a mock implementation of io.Closer for testing.
 //
@@ -92,7 +72,6 @@ func TestHelperWithGenericClosers(t *testing.T) {
 
 		return closer
 	})
-	helper.Logger = NewTestLogger(t)
 
 	t.Logf("Created MultiOutputHelper with %d output managers", numManagers)
 
@@ -137,7 +116,7 @@ func TestHelperWithGenericClosers(t *testing.T) {
 			time.Sleep(10 * time.Millisecond)
 		} else {
 			// Or explicitly calling ManagerClose
-			if err := helper.ManagerClose(index, true); err != nil {
+			if err := helper.ManagerClose(index); err != nil {
 				t.Errorf("EXPECTED nil error closing manager %d, got %v", index, err)
 			}
 
@@ -193,7 +172,6 @@ func TestHelperConsensusWithGenericClosers(t *testing.T) {
 			ResultErr:  nil,
 		}
 	})
-	helper.Logger = NewTestLogger(t)
 
 	consensusCtx := helper.ConsensusContext()
 
@@ -210,7 +188,7 @@ func TestHelperConsensusWithGenericClosers(t *testing.T) {
 		}
 
 		// Close manager index
-		if err := helper.ManagerClose(index, false); err != nil {
+		if err := helper.ManagerClose(index); err != nil {
 			t.Errorf("EXPECTED no error closing manager %d, got %v", index, err)
 		}
 	}
@@ -238,7 +216,6 @@ func TestEdgeCases(t *testing.T) {
 				ResultErr:  nil,
 			}
 		})
-		result.Logger = NewTestLogger(t)
 
 		return result
 	}
@@ -287,7 +264,7 @@ func TestEdgeCases(t *testing.T) {
 		helper := newHelper(t)
 
 		expectPanic(t, func() {
-			_ = helper.ManagerClose(99, true)
+			_ = helper.ManagerClose(99)
 		}, "invalid manager index: 99")
 	})
 
@@ -311,7 +288,7 @@ func TestEdgeCases(t *testing.T) {
 
 		helper := newHelper(t)
 
-		err := helper.ManagerClose(0, true) // Should not panic
+		err := helper.ManagerClose(0) // Should not panic
 		if err != nil {
 			t.Errorf("EXPECTED nil error, but got: %#v", err)
 		}
@@ -327,7 +304,7 @@ func TestEdgeCases(t *testing.T) {
 
 		(*helper.ManagerCloser(0)).ResultErr = errTestCloseError
 
-		err := helper.ManagerClose(0, true) // Should not panic
+		err := helper.ManagerClose(0) // Should not panic
 		expectedWrappedErr := fmt.Errorf(
 			"error closing output: %w",
 			errTestCloseError,
@@ -353,7 +330,7 @@ func TestEdgeCases(t *testing.T) {
 
 		helper := newHelper(t)
 
-		err := helper.ManagerClose(0, true) // Should not panic
+		err := helper.ManagerClose(0) // Should not panic
 		if err != nil {
 			t.Errorf("EXPECTED nil error, but got: %#v", err)
 		}

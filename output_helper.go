@@ -7,7 +7,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log"
 	"sync"
 )
 
@@ -41,7 +40,6 @@ type MultiOutputHelper[T io.Closer] struct {
 	managers     []OutputManager[T]
 	consensusCtx func() context.Context
 	cancelFn     func()
-	Logger       *log.Logger
 }
 
 // NewMultiOutputHelper creates a new MultiOutputHelper.
@@ -64,7 +62,6 @@ func NewMultiOutputHelper[T io.Closer](outputs int, initializer func(int) T) *Mu
 		managers:     managers,
 		consensusCtx: func() context.Context { return cancelableCtx },
 		cancelFn:     cancel,
-		Logger:       log.Default(),
 	}
 }
 
@@ -122,7 +119,6 @@ func (moh *MultiOutputHelper[T]) startManagerGoroutine(initialCtx context.Contex
 
 	go func() {
 		defer moh.managers[outputID].wGroup.Done()
-		// moh.Logger.Printf("starting goroutine to listen for context cancelation for manager %d", outputID)
 		//nolint: contextcheck
 		currentCtx, curCancelFunc := context.WithCancel(initialCtx)
 
@@ -210,10 +206,8 @@ func (moh *MultiOutputHelper[T]) markClosed(outputID int) error {
 // If the manager is uninitialized, we simply mark it closed and optionally
 // skip calling closer. If the manager is waiting, we close the ctxChan, which
 // signals the manager goroutine to exit. This method returns nil on success.
-//
-// If callCloser is false, we reset manager.closer to nil to skip the final close call.
 //nolint: funlen // **FIXME**
-func (moh *MultiOutputHelper[T]) ManagerClose(outputID int, callCloser bool) error {
+func (moh *MultiOutputHelper[T]) ManagerClose(outputID int) error {
 	moh.validateOutputID(outputID)
 	manager := &moh.managers[outputID]
 
@@ -227,7 +221,7 @@ func (moh *MultiOutputHelper[T]) ManagerClose(outputID int, callCloser bool) err
 			return false, MOHelperClosed
 		case MOHelperUninitialized:
 			manager.state = MOHelperClosed
-			callCloserBeforeReturn := callCloser && !manager.closerCallHandled
+			callCloserBeforeReturn := !manager.closerCallHandled
 			manager.closerCallHandled = true
 
 			return callCloserBeforeReturn, MOHelperUninitialized
@@ -236,10 +230,6 @@ func (moh *MultiOutputHelper[T]) ManagerClose(outputID int, callCloser bool) err
 		default:
 			assertf(manager.state == MOHelperWaiting, "INTERNAL ERROR: Unhandled state %v", manager.state)
 			// The goroutine will exit once ctxChan is closed.
-			if !callCloser {
-				manager.closerCallHandled = true
-			}
-
 			close(manager.ctxChan)
 			// We do NOT directly set state here, because the goroutine
 			// will do it in markClosed().
@@ -323,7 +313,7 @@ func (moh *MultiOutputHelper[T]) ConsensusContext() context.Context {
 func (moh *MultiOutputHelper[T]) Close() error {
 	for i := range moh.managers {
 		if moh.ManagerState(i) != MOHelperClosed {
-			moh.ManagerClose(i, false)
+			moh.ManagerClose(i)
 		}
 	}
 
