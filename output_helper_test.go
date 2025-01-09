@@ -312,6 +312,54 @@ func TestEdgeCases(t *testing.T) {
 
 		assertErrorString(t, err, expectedWrappedErr)
 
+		secondCloseErr := helper.ManagerClose(0) // Should not error
+
+		assertErrorString(t, secondCloseErr, nil)
+
+		assertProperHelperCleanup(t, helper, 2)
+	})
+
+	// Canceling context for manager 0
+	t.Run("ManagerClose returnes wrapped error", func(t *testing.T) {
+		t.Parallel()
+
+		helper := newHelper(t)
+
+		(*helper.ManagerCloser(0)).ResultErr = errTestCloseError
+
+		ctx, cancel := context.WithCancel(context.Background())
+
+		if err := helper.ManagerSetContext(ctx, 0); err != nil {
+			t.Errorf("Unexpected error %v setting manager context", err) // should not be possible to be non-nil.
+		}
+
+		if callCount := (*helper.ManagerCloser(0)).GetCloseCalls(); callCount != 0 {
+			t.Errorf("EXPECTED manager %d's closer to be called 0 time, saw %d times", 0, callCount)
+		}
+
+		cancel()
+		time.Sleep(10 * time.Millisecond)
+
+		if state := helper.ManagerState(0); state != stream.MOHelperClosed {
+			t.Errorf("EXPECTED manager %d to be %v, saw %v", 0, stream.MOHelperClosed, state)
+		}
+
+		if callCount := (*helper.ManagerCloser(0)).GetCloseCalls(); callCount != 1 {
+			t.Errorf("EXPECTED manager %d's closer to be called 1 time, saw %d times", 0, callCount)
+		}
+
+		err := helper.ManagerClose(0) // Should return previous error
+		expectedWrappedErr := fmt.Errorf(
+			"error closing output: %w",
+			errTestCloseError,
+		)
+
+		assertErrorString(t, err, expectedWrappedErr)
+
+		secondCloseErr := helper.ManagerClose(0) // Should not error
+
+		assertErrorString(t, secondCloseErr, nil)
+
 		assertProperHelperCleanup(t, helper, 2)
 	})
 

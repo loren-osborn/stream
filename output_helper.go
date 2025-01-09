@@ -211,20 +211,23 @@ func (moh *MultiOutputHelper[T]) ManagerClose(outputID int) error {
 	moh.validateOutputID(outputID)
 	manager := &moh.managers[outputID]
 
-	atomicOps := func() (bool, MultiOutputHelperState) {
+	atomicOps := func() (bool, MultiOutputHelperState, error) {
 		manager.mu.Lock()
 
 		defer manager.mu.Unlock()
 
 		switch manager.state {
 		case MOHelperClosed:
-			return false, MOHelperClosed
+			retErr := manager.closingErr
+			manager.closingErr = nil
+
+			return false, MOHelperClosed, retErr
 		case MOHelperUninitialized:
 			manager.state = MOHelperClosed
 			callCloserBeforeReturn := !manager.closerCallHandled
 			manager.closerCallHandled = true
 
-			return callCloserBeforeReturn, MOHelperUninitialized
+			return callCloserBeforeReturn, MOHelperUninitialized, nil
 		case MOHelperWaiting:
 			fallthrough
 		default:
@@ -233,15 +236,15 @@ func (moh *MultiOutputHelper[T]) ManagerClose(outputID int) error {
 			close(manager.ctxChan)
 			// We do NOT directly set state here, because the goroutine
 			// will do it in markClosed().
-			return false, MOHelperWaiting
+			return false, MOHelperWaiting, nil
 		}
 	}
 
-	callCloserNow, prevStatus := atomicOps()
+	callCloserNow, prevStatus, retErr := atomicOps()
 
 	switch prevStatus {
 	case MOHelperClosed:
-		return nil
+		return retErr
 	case MOHelperUninitialized:
 		moh.updateConsensusCtx()
 
