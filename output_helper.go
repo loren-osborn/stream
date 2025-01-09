@@ -5,10 +5,16 @@ package stream
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"sync"
 )
+
+// ErrActiveContextClosedOutput indicates that you are attempting to assign a
+// non-canceled context to an MultiOutputHelper's output that has already been
+// closed.
+var ErrActiveContextClosedOutput = errors.New("assigning non-canceled context to already closed output")
 
 // MultiOutputHelperState indicates the state of a particular manager for an output.
 type MultiOutputHelperState int
@@ -26,13 +32,13 @@ const (
 
 // OutputManager manages the cancelation of the context for a single output.
 type OutputManager[T io.Closer] struct {
-	mu                sync.RWMutex
-	state             MultiOutputHelperState
-	ctxChan           chan context.Context
-	closer            T
-	closerCallHandled bool
-	wGroup            sync.WaitGroup
-	closingErr        error
+	mu           sync.RWMutex
+	state        MultiOutputHelperState
+	ctxChan      chan context.Context
+	closer       T
+	closeFn      func()
+	closeErrChan chan error
+	wGroup       sync.WaitGroup
 }
 
 // MultiOutputHelper is a helper that assists with cancelation of multiple output Sources.
@@ -50,19 +56,42 @@ type MultiOutputHelper[T io.Closer] struct {
 // for the given output index.
 func NewMultiOutputHelper[T io.Closer](outputs int, initializer func(int) T) *MultiOutputHelper[T] {
 	managers := make([]OutputManager[T], outputs)
-
-	for i := range outputs {
-		managers[i].closer = initializer(i)
-		managers[i].ctxChan = make(chan context.Context, 1)
-	}
-
 	cancelableCtx, cancel := context.WithCancel(context.Background())
-
-	return &MultiOutputHelper[T]{
+	result := &MultiOutputHelper[T]{
 		managers:     managers,
 		consensusCtx: func() context.Context { return cancelableCtx },
 		cancelFn:     cancel,
 	}
+
+	for idx := range outputs {
+		managers[idx].closer = initializer(idx)
+		managers[idx].ctxChan = make(chan context.Context, 1)
+		managers[idx].closeErrChan = make(chan error, 1)
+		managers[idx].closeFn = sync.OnceFunc(func() {
+			managers[idx].mu.Lock()
+
+			go func() {
+				func() {
+					defer managers[idx].mu.Unlock()
+
+					managers[idx].state = MOHelperClosed
+				}()
+
+				result.updateConsensusCtx()
+
+				if err := managers[idx].closer.Close(); err != nil {
+					managers[idx].closeErrChan <- fmt.Errorf(
+						"error closing output: %w",
+						err,
+					)
+				}
+
+				close(managers[idx].closeErrChan)
+			}()
+		})
+	}
+
+	return result
 }
 
 func (moh *MultiOutputHelper[T]) validateOutputID(outputID int) {
@@ -86,7 +115,8 @@ func (moh *MultiOutputHelper[T]) ManagerState(outputID int) MultiOutputHelperSta
 // If the manager is in MOHelperUninitialized state, we launch a goroutine that
 // monitors for context cancelation. If the manager is in MOHelperWaiting state,
 // we update it with a new context. If it is closed, this method is no-op.
-func (moh *MultiOutputHelper[T]) ManagerSetContext(newCtx context.Context, outputID int) error {
+//nolint: revive // Intentional argument order. outputID is the destination, newCtx is what's being assigned.
+func (moh *MultiOutputHelper[T]) ManagerSetContext(outputID int, newCtx context.Context) error {
 	moh.validateOutputID(outputID)
 
 	if newCtx == nil {
@@ -100,6 +130,10 @@ func (moh *MultiOutputHelper[T]) ManagerSetContext(newCtx context.Context, outpu
 
 	switch manager.state {
 	case MOHelperClosed:
+		if newCtx.Err() == nil {
+			return ErrActiveContextClosedOutput
+		}
+
 		return nil
 	case MOHelperUninitialized:
 		manager.state = MOHelperWaiting
@@ -119,86 +153,38 @@ func (moh *MultiOutputHelper[T]) startManagerGoroutine(initialCtx context.Contex
 
 	go func() {
 		defer moh.managers[outputID].wGroup.Done()
-		//nolint: contextcheck
+
 		currentCtx, curCancelFunc := context.WithCancel(initialCtx)
+
+		drainCurrentChannel := func() {
+			curCancelFunc()
+			<-currentCtx.Done()
+		}
 
 		for {
 			select {
 			case <-currentCtx.Done():
-				curCancelFunc()
-				<-currentCtx.Done()
+				drainCurrentChannel()
 
-				moh.managers[outputID].closingErr = moh.markClosed(outputID)
+				moh.managers[outputID].closeFn()
 
+				//nolint: govet // I think this is handled, but want a second opion.
 				return
 			case newCtx := <-moh.managers[outputID].ctxChan:
-				curCancelFunc()
-				<-currentCtx.Done()
+				drainCurrentChannel()
 
 				if newCtx == nil {
-					// We interpret a closed channel or nil as a signal to close
-					moh.managers[outputID].closingErr = moh.markClosed(outputID)
+					moh.managers[outputID].closeFn()
 
 					return
 				}
 				// Switch to a new context
 
-				//nolint: fatcontext
+				//nolint: fatcontext,contextcheck,govet // I think this is handled, but want a second opion.
 				currentCtx, curCancelFunc = context.WithCancel(newCtx)
 			}
 		}
 	}()
-}
-
-// markClosed sets the manager's state to MOHelperClosed, closes the closer (if any),
-// and checks whether the consensus context should be canceled.
-func (moh *MultiOutputHelper[T]) markClosed(outputID int) error {
-	manager := &moh.managers[outputID]
-
-	alreadyClosed, callCloserBeforeReturn := func() (bool, bool) {
-		manager.mu.Lock()
-
-		defer manager.mu.Unlock()
-
-		if manager.state == MOHelperClosed {
-			return true, false
-		}
-
-		manager.state = MOHelperClosed
-
-		if manager.closerCallHandled {
-			return false, false
-		}
-
-		manager.closerCallHandled = true
-
-		return false, true
-	}()
-
-	if alreadyClosed {
-		return nil
-	}
-
-	moh.updateConsensusCtx()
-
-	// Attempt to close the output's closer, if present.
-	if callCloserBeforeReturn {
-		assertf(
-			manager.closingErr == nil,
-			"Close() should only be called once. It appears Close() was already "+
-				"called, and retured %v",
-			manager.closingErr,
-		)
-
-		if err := manager.closer.Close(); err != nil {
-			return fmt.Errorf(
-				"error closing output: %w",
-				err,
-			)
-		}
-	}
-
-	return nil
 }
 
 // ManagerClose closes context monitoring for outputID.
@@ -206,80 +192,33 @@ func (moh *MultiOutputHelper[T]) markClosed(outputID int) error {
 // If the manager is uninitialized, we simply mark it closed and optionally
 // skip calling closer. If the manager is waiting, we close the ctxChan, which
 // signals the manager goroutine to exit. This method returns nil on success.
-//nolint: funlen // **FIXME**
 func (moh *MultiOutputHelper[T]) ManagerClose(outputID int) error {
 	moh.validateOutputID(outputID)
 	manager := &moh.managers[outputID]
 
-	atomicOps := func() (bool, MultiOutputHelperState, error) {
+	func() {
 		manager.mu.Lock()
 
 		defer manager.mu.Unlock()
 
 		switch manager.state {
-		case MOHelperClosed:
-			retErr := manager.closingErr
-			manager.closingErr = nil
-
-			return false, MOHelperClosed, retErr
 		case MOHelperUninitialized:
 			manager.state = MOHelperClosed
-			callCloserBeforeReturn := !manager.closerCallHandled
-			manager.closerCallHandled = true
-
-			return callCloserBeforeReturn, MOHelperUninitialized, nil
-		case MOHelperWaiting:
-			fallthrough
-		default:
-			assertf(manager.state == MOHelperWaiting, "INTERNAL ERROR: Unhandled state %v", manager.state)
-			// The goroutine will exit once ctxChan is closed.
+			go manager.closeFn()
+		case MOHelperWaiting: // The goroutine will exit once ctxChan is closed.
 			close(manager.ctxChan)
 			// We do NOT directly set state here, because the goroutine
 			// will do it in markClosed().
-			return false, MOHelperWaiting, nil
+		case MOHelperClosed:
+			fallthrough
+		default:
+			assertf(manager.state == MOHelperClosed, "INTERNAL ERROR: Unhandled state %v", manager.state)
 		}
-	}
+	}()
 
-	callCloserNow, prevStatus, retErr := atomicOps()
+	manager.wGroup.Wait()
 
-	switch prevStatus {
-	case MOHelperClosed:
-		return retErr
-	case MOHelperUninitialized:
-		moh.updateConsensusCtx()
-
-		if callCloserNow {
-			assertf(
-				moh.managers[outputID].closingErr == nil,
-				"Close() should only be called once. It appears Close() was already "+
-					"called, and retured %v",
-				manager.closingErr,
-			)
-
-			if err := manager.closer.Close(); err != nil {
-				return fmt.Errorf("error closing output: %w", err)
-			}
-		}
-
-		return nil
-	case MOHelperWaiting:
-		fallthrough
-	default:
-		assertf(prevStatus == MOHelperWaiting, "INTERNAL ERROR: Unhandled state %v", prevStatus)
-
-		manager.wGroup.Wait()
-
-		return func() error {
-			manager.mu.Lock()
-
-			defer manager.mu.Unlock()
-
-			result := moh.managers[outputID].closingErr
-			moh.managers[outputID].closingErr = nil
-
-			return result
-		}()
-	}
+	return <-manager.closeErrChan
 }
 
 // ManagerCloser returns the manager's closer.
@@ -292,11 +231,6 @@ func (moh *MultiOutputHelper[T]) ManagerCloser(outputID int) *T {
 // updateConsensusCtx checks if all Managers are closed, and if so, cancels the
 // consensus context.
 func (moh *MultiOutputHelper[T]) updateConsensusCtx() {
-	// If already canceled, no need to check anything.
-	if moh.consensusCtx().Err() != nil {
-		return
-	}
-
 	for i := range moh.managers {
 		if moh.ManagerState(i) != MOHelperClosed {
 			return

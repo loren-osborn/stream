@@ -88,7 +88,7 @@ func TestHelperWithGenericClosers(t *testing.T) {
 			managerInfo[index].ctx = &ctx
 			managerInfo[index].cancelFn = cancel
 
-			if err := helper.ManagerSetContext(ctx, index); err != nil {
+			if err := helper.ManagerSetContext(index, ctx); err != nil {
 				t.Fatalf("EXPECTED to set context for manager %d: failed: %v", index, err)
 			}
 
@@ -241,7 +241,7 @@ func TestEdgeCases(t *testing.T) {
 		helper := newHelper(t)
 
 		expectPanic(t, func() {
-			_ = helper.ManagerSetContext(context.Background(), 99)
+			_ = helper.ManagerSetContext(99, context.Background())
 		}, "invalid manager index: 99")
 	})
 
@@ -252,8 +252,7 @@ func TestEdgeCases(t *testing.T) {
 		helper := newHelper(t)
 
 		expectPanic(t, func() {
-			//nolint: staticcheck // Explicitly testing nil context handling
-			_ = helper.ManagerSetContext(nil, 0)
+			_ = helper.ManagerSetContext(0, nil)
 		}, "Attempting to set invalid nil context for outputID 0")
 	})
 
@@ -274,7 +273,7 @@ func TestEdgeCases(t *testing.T) {
 
 		helper := newHelper(t)
 
-		err := helper.ManagerSetContext(context.Background(), 0) // Should not panic
+		err := helper.ManagerSetContext(0, context.Background()) // Should not panic
 		if err != nil {
 			t.Errorf("EXPECTED nil error, but got: %#v", err)
 		}
@@ -329,7 +328,7 @@ func TestEdgeCases(t *testing.T) {
 
 		ctx, cancel := context.WithCancel(context.Background())
 
-		if err := helper.ManagerSetContext(ctx, 0); err != nil {
+		if err := helper.ManagerSetContext(0, ctx); err != nil {
 			t.Errorf("Unexpected error %v setting manager context", err) // should not be possible to be non-nil.
 		}
 
@@ -383,11 +382,17 @@ func TestEdgeCases(t *testing.T) {
 			t.Errorf("EXPECTED nil error, but got: %#v", err)
 		}
 
-		// test that Set context after close also gives a nil error:
-		err = helper.ManagerSetContext(context.Background(), 0) // Should not panic
-		if err != nil {
-			t.Errorf("EXPECTED nil error, but got: %#v", err)
-		}
+		precanceledCtx, cancel := context.WithCancel(context.Background())
+
+		cancel()
+
+		// test that Set pre-canceled context after close also gives a nil error:
+		err = helper.ManagerSetContext(0, precanceledCtx)
+		assertErrorString(t, err, nil)
+
+		// test that Set active context after close also gives correct error:
+		err = helper.ManagerSetContext(0, context.Background())
+		assertErrorString(t, err, stream.ErrActiveContextClosedOutput)
 
 		assertProperHelperCleanup(t, helper, 2)
 	})
