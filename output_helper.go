@@ -248,10 +248,17 @@ func (moh *MultiOutputHelper[T]) ConsensusContext() context.Context {
 
 // Close performs any final resource cleanup.
 func (moh *MultiOutputHelper[T]) Close() error {
+	errList := make([]error, 0, len(moh.managers))
+
 	for i := range moh.managers {
-		if moh.ManagerState(i) != MOHelperClosed {
-			moh.ManagerClose(i)
+		err := moh.ManagerClose(i)
+		if err != nil {
+			errList = append(errList, err)
 		}
+	}
+
+	if len(errList) > 0 {
+		return fmt.Errorf("aggregate close error(s): %w", errors.Join(errList...))
 	}
 
 	return nil

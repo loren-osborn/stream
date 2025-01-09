@@ -397,3 +397,130 @@ func TestEdgeCases(t *testing.T) {
 		assertProperHelperCleanup(t, helper, 2)
 	})
 }
+
+// ErrTestErrorCloserZero is a synthetic error for closing output #0.
+var ErrTestErrorCloserZero = errors.New("closer error #0")
+
+// ErrTestErrorCloserOne is a synthetic error for closing output #1.
+var ErrTestErrorCloserOne = errors.New("closer error #1")
+
+// ErrTestErrorCloserTwo is a synthetic error for closing output #2.
+var ErrTestErrorCloserTwo = errors.New("closer error #2")
+
+// ErrTestErrorCloserThree is a synthetic error for closing output #3.
+var ErrTestErrorCloserThree = errors.New("closer error #3")
+
+// ErrTestErrorCloserFour is a synthetic error for closing output #4.
+var ErrTestErrorCloserFour = errors.New("closer error #4")
+
+// TestHelperCloseAggregatesErrorsWhenContextCanceled is a single test that
+// has multiple sub-tests for zero, one, and multiple manager errors.
+// It uses context cancellation (rather than ManagerClose) to trigger
+// each manager's closer, expecting that any returned errors get
+// aggregated and returned by MultiOutputHelper.Close().
+//nolint: funlen // **FIXME**
+func TestHelperCloseAggregatesErrorsWhenContextCanceled(t *testing.T) {
+	t.Parallel()
+
+	// We'll define sub-tests for 4 scenarios:
+	testCases := []struct {
+		name        string
+		numManagers int
+		errors      []error // Each manager's ResultErr
+		expectedErr error   // Exact combined error we expect from helper.Close()
+	}{
+		{
+			name:        "ZeroErrors",
+			numManagers: 3,
+			errors:      []error{nil, nil, nil},
+			// Expect no error at all
+			expectedErr: nil,
+		},
+		{
+			name:        "SingleError",
+			numManagers: 3,
+			// Only manager #1 has an error; others are nil
+			errors: []error{nil, ErrTestErrorCloserOne, nil},
+			// Expect a single error with manager 1's text
+			expectedErr: fmt.Errorf(
+				"aggregate close error(s): %w",
+				errors.Join(fmt.Errorf("error closing output: %w", ErrTestErrorCloserOne)),
+			),
+		},
+		{
+			name:        "MultipleErrors",
+			numManagers: 3,
+			// Two managers have an error; one is nil
+			errors: []error{
+				ErrTestErrorCloserZero,
+				nil,
+				ErrTestErrorCloserTwo,
+			},
+			// Expect both error messages combined in some aggregator format
+			expectedErr: fmt.Errorf(
+				"aggregate close error(s): %w",
+				errors.Join(
+					fmt.Errorf("error closing output: %w", ErrTestErrorCloserZero),
+					fmt.Errorf("error closing output: %w", ErrTestErrorCloserTwo),
+				),
+			),
+		},
+		{
+			name:        "MixedNilAndNonNil",
+			numManagers: 5,
+			// Some nil, some errors
+			errors: []error{
+				ErrTestErrorCloserZero,
+				nil,
+				nil,
+				ErrTestErrorCloserThree,
+				ErrTestErrorCloserFour,
+			},
+			// We only list non-nil errors in the aggregator
+			expectedErr: fmt.Errorf(
+				"aggregate close error(s): %w",
+				errors.Join(
+					fmt.Errorf("error closing output: %w", ErrTestErrorCloserZero),
+					fmt.Errorf("error closing output: %w", ErrTestErrorCloserThree),
+					fmt.Errorf("error closing output: %w", ErrTestErrorCloserFour),
+				),
+			),
+		},
+	}
+
+	for _, tCase := range testCases {
+		t.Run(tCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			// 1) Create a new MultiOutputHelper with custom errors
+			helper := stream.NewMultiOutputHelper(tCase.numManagers, func(idx int) *MockCloser {
+				return &MockCloser{
+					CloseCalls: 0,
+					CustomData: "Stuff",
+					ResultErr:  tCase.errors[idx],
+				}
+			})
+
+			// 2) Set a cancelable context for each manager, then cancel it
+			//    to simulate "closing by context".
+			for i := range tCase.numManagers {
+				ctx, cancel := context.WithCancel(context.Background())
+				if err := helper.ManagerSetContext(i, ctx); err != nil {
+					t.Fatalf("ManagerSetContext(%d) failed: %v", i, err)
+				}
+
+				cancel()
+			}
+
+			// 3) Wait a short moment for goroutines to finish
+			//    closing the closers via context cancellation.
+			time.Sleep(10 * time.Millisecond)
+
+			// 4) Call helper.Close() to gather aggregator error(s).
+			aggregatedErr := helper.Close()
+
+			// 5) Compare aggregatedErr with the expected error
+			assertErrorString(t, aggregatedErr, tCase.expectedErr)
+		})
+	}
+}
