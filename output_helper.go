@@ -32,10 +32,12 @@ const (
 
 // OutputManager manages the cancelation of the context for a single output.
 type OutputManager[T io.Closer] struct {
+	helper       *MultiOutputHelper[T]
+	outputID     int
 	mu           sync.RWMutex
 	state        MultiOutputHelperState
 	ctxChan      chan context.Context
-	closer       T
+	output       T
 	closeFn      func()
 	closeErrChan chan error
 	wGroup       sync.WaitGroup
@@ -64,7 +66,9 @@ func NewMultiOutputHelper[T io.Closer](outputs int, initializer func(int) T) *Mu
 	}
 
 	for idx := range outputs {
-		managers[idx].closer = initializer(idx)
+		managers[idx].helper = result
+		managers[idx].outputID = idx
+		managers[idx].output = initializer(idx)
 		managers[idx].ctxChan = make(chan context.Context, 1)
 		managers[idx].closeErrChan = make(chan error, 1)
 		managers[idx].closeFn = sync.OnceFunc(func() {
@@ -79,7 +83,7 @@ func NewMultiOutputHelper[T io.Closer](outputs int, initializer func(int) T) *Mu
 
 				result.updateConsensusCtx()
 
-				if err := managers[idx].closer.Close(); err != nil {
+				if err := managers[idx].output.Close(); err != nil {
 					managers[idx].closeErrChan <- fmt.Errorf(
 						"error closing output: %w",
 						err,
@@ -98,6 +102,13 @@ func (moh *MultiOutputHelper[T]) validateOutputID(outputID int) {
 	if (outputID < 0) || (outputID >= len(moh.managers)) {
 		panic(fmt.Sprintf("invalid manager index: %d", outputID))
 	}
+}
+
+// Manager returns the output manager proxy for outputID.
+func (moh *MultiOutputHelper[T]) Manager(outputID int) *OutputManager[T] {
+	moh.validateOutputID(outputID)
+
+	return &moh.managers[outputID]
 }
 
 // ManagerState returns the state of the manager for outputID.  This is concurrency-safe.
@@ -189,9 +200,9 @@ func (moh *MultiOutputHelper[T]) startManagerGoroutine(initialCtx context.Contex
 
 // ManagerClose closes context monitoring for outputID.
 //
-// If the manager is uninitialized, we simply mark it closed and optionally
-// skip calling closer. If the manager is waiting, we close the ctxChan, which
-// signals the manager goroutine to exit. This method returns nil on success.
+// If the manager is uninitialized, we simply mark it closed. If the manager is
+// waiting, we close the ctxChan, which signals the manager goroutine to exit.
+// This method returns nil on success.
 func (moh *MultiOutputHelper[T]) ManagerClose(outputID int) error {
 	moh.validateOutputID(outputID)
 	manager := &moh.managers[outputID]
@@ -221,11 +232,11 @@ func (moh *MultiOutputHelper[T]) ManagerClose(outputID int) error {
 	return <-manager.closeErrChan
 }
 
-// ManagerCloser returns the manager's closer.
-func (moh *MultiOutputHelper[T]) ManagerCloser(outputID int) *T {
+// ManagerOutput returns the manager's output.
+func (moh *MultiOutputHelper[T]) ManagerOutput(outputID int) *T {
 	moh.validateOutputID(outputID)
 
-	return &moh.managers[outputID].closer
+	return &moh.managers[outputID].output
 }
 
 // updateConsensusCtx checks if all Managers are closed, and if so, cancels the
@@ -262,4 +273,37 @@ func (moh *MultiOutputHelper[T]) Close() error {
 	}
 
 	return nil
+}
+
+// Close closes context monitoring for output.
+//
+// If the manager is uninitialized, we simply mark it closed. If the manager is
+// waiting, we close the ctxChan, which signals the manager goroutine to exit.
+// This method returns nil on success.
+func (om *OutputManager[T]) Close() error {
+	return om.helper.ManagerClose(om.outputID)
+}
+
+// Output returns the manager's output.
+func (om *OutputManager[T]) Output() *T {
+	return om.helper.ManagerOutput(om.outputID)
+}
+
+// OutputID returns the manager's outputID.
+func (om *OutputManager[T]) OutputID() int {
+	return om.outputID
+}
+
+// SetContext sets the active context for output.
+//
+// If the manager is in MOHelperUninitialized state, we launch a goroutine that
+// monitors for context cancelation. If the manager is in MOHelperWaiting state,
+// we update it with a new context. If it is closed, this method is no-op.
+func (om *OutputManager[T]) SetContext(newCtx context.Context) error {
+	return om.helper.ManagerSetContext(om.outputID, newCtx)
+}
+
+// State returns the state of the manager's output.
+func (om *OutputManager[T]) State() MultiOutputHelperState {
+	return om.helper.ManagerState(om.outputID)
 }

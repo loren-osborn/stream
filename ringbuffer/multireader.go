@@ -262,11 +262,11 @@ func (mrb *MultiReaderBuf[T]) ReaderToMap(readerID int) map[int]T {
 
 // // Reader management
 
-// CloseReader closes the reader with the specified readerID. Once closed, any
+// ReaderClose closes the reader with the specified readerID. Once closed, any
 // operation on this Reader is invalid and will panic. Closing a reader signals
 // that the reader no longer needs to consume data, allowing the buffer to
 // manage its data accordingly.
-func (mrb *MultiReaderBuf[T]) CloseReader(readerID int) {
+func (mrb *MultiReaderBuf[T]) ReaderClose(readerID int) error {
 	mrb.mu.Lock()
 	defer mrb.mu.Unlock()
 
@@ -299,7 +299,7 @@ func (mrb *MultiReaderBuf[T]) CloseReader(readerID int) {
 	if newReaderCount < 1 {
 		mrb.data = nil
 
-		return
+		return nil
 	}
 
 	assertf(newMinIdx != -1, "INTERNAL ERROR: newMinIdx not set")
@@ -307,6 +307,8 @@ func (mrb *MultiReaderBuf[T]) CloseReader(readerID int) {
 	if newMinIdx > prevMinIdx {
 		mrb.data.Discard(newMinIdx - prevMinIdx)
 	}
+
+	return nil
 }
 
 // Reader returns the reader associated with the given readerID. It returns
@@ -461,6 +463,14 @@ func (r *Reader[T]) ToSlice() []T {
 // panics if the reader has been closed.
 func (r *Reader[T]) ToMap() map[int]T {
 	return r.owner.ReaderToMap(r.readerID)
+}
+
+// Close closes the reader. Once closed, any
+// operation on this Reader is invalid and will panic. Closing a reader signals
+// that the reader no longer needs to consume data, allowing the buffer to
+// manage its data accordingly.
+func (r *Reader[T]) Close() error {
+	return r.owner.ReaderClose(r.readerID)
 }
 
 // We panic on range error only.

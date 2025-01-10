@@ -657,7 +657,7 @@ func TestMultiReaderBuf_ReaderToSlice(t *testing.T) {
 }
 
 //nolint: funlen // *FIXME*
-func TestMultiReaderBuf_CloseReader(t *testing.T) {
+func TestMultiReaderBuf_ReaderClose(t *testing.T) {
 	t.Parallel()
 
 	t.Run("CloseValidReader", func(t *testing.T) {
@@ -668,7 +668,9 @@ func TestMultiReaderBuf_CloseReader(t *testing.T) {
 		mrb.Append(100)
 		mrb.Append(200)
 
-		mrb.CloseReader(0)
+		if err := mrb.ReaderClose(0); err != nil {
+			t.Errorf("Expected nil error from ReaderClose, got %#v", err)
+		}
 
 		val, err := mrb.ReaderPeekFirst(1)
 		if err != nil || val == nil || *val != 100 {
@@ -703,14 +705,16 @@ func TestMultiReaderBuf_CloseReader(t *testing.T) {
 			}
 		}()
 
-		mrb.CloseReader(999)
+		_ = mrb.ReaderClose(999)
 	})
 
-	t.Run("CloseReaderTwice", func(t *testing.T) {
+	t.Run("ReaderCloseTwice", func(t *testing.T) {
 		t.Parallel()
 
 		mrb := ringbuffer.NewMultiReaderBuf[int](0, 1)
-		mrb.CloseReader(0)
+		if err := mrb.ReaderClose(0); err != nil {
+			t.Errorf("Expected nil error from ReaderClose, got %#v", err)
+		}
 
 		defer func() {
 			expecting := "closing closed reader 0"
@@ -722,7 +726,9 @@ func TestMultiReaderBuf_CloseReader(t *testing.T) {
 			}
 		}()
 
-		mrb.CloseReader(0)
+		if err := mrb.ReaderClose(0); err != nil {
+			t.Errorf("Expected nil error from ReaderClose, got %#v", err)
+		}
 	})
 }
 
@@ -742,7 +748,9 @@ func TestMultiReaderBuf_LenReaders(t *testing.T) {
 		t.Errorf("Expected 3 reader slots, got %d", initialRangeCount)
 	}
 
-	mrb.CloseReader(1)
+	if err := mrb.ReaderClose(1); err != nil {
+		t.Errorf("Expected nil error from ReaderClose, got %#v", err)
+	}
 
 	afterCloseCount := mrb.LenReaders()
 	if afterCloseCount != 2 {
@@ -916,7 +924,9 @@ func TestMultiReaderBuf_ErrorConditions(t *testing.T) {
 			t.Errorf("Expected reader 1 valid, got invalid")
 		}
 
-		mrb.CloseReader(1)
+		if err := reader.Close(); err != nil {
+			t.Errorf("Expected nil error from reader.Close, got %#v", err)
+		}
 
 		if reader.Valid() {
 			t.Errorf("Expected reader 1 invalid, got valid")
@@ -939,7 +949,9 @@ func TestMultiReaderBuf_ErrorConditions(t *testing.T) {
 		t.Parallel()
 
 		mrb := ringbuffer.NewMultiReaderBuf[int](4, 2)
-		mrb.CloseReader(1)
+		if err := mrb.ReaderClose(1); err != nil {
+			t.Errorf("Expected nil error from ReaderClose, got %#v", err)
+		}
 
 		defer func() {
 			expected := "consuming from closed reader 1"
@@ -983,7 +995,10 @@ func setupClosedMultiReaderBuf(t *testing.T) *ringbuffer.MultiReaderBuf[int] {
 	mrb.Append(10)
 	mrb.Append(20)
 	mrb.Append(30)
-	mrb.CloseReader(0)
+
+	if err := mrb.ReaderClose(0); err != nil {
+		t.Errorf("Expected nil error from ReaderClose, got %#v", err)
+	}
 
 	return mrb
 }
@@ -1049,7 +1064,9 @@ func TestMultiReaderBuf_ReaderAt_ClosedReaderID(t *testing.T) {
 	mrb.Append(20)
 
 	// Close reader 0
-	mrb.CloseReader(0)
+	if err := mrb.ReaderClose(0); err != nil {
+		t.Errorf("Expected nil error from ReaderClose, got %#v", err)
+	}
 
 	defer func() {
 		expected := "reading from closed reader 0"
@@ -1072,7 +1089,9 @@ func TestMultiReaderBuf_ReaderRangeFirst_ClosedReaderID(t *testing.T) {
 	mrb.Append(20)
 
 	// Close reader 0
-	mrb.CloseReader(0)
+	if err := mrb.ReaderClose(0); err != nil {
+		t.Errorf("Expected nil error from ReaderClose, got %#v", err)
+	}
 
 	defer func() {
 		expected := "indexing closed reader 0"
@@ -1126,7 +1145,9 @@ func TestMultiReaderBuf_ReaderRange_ClosedReaderID(t *testing.T) {
 	mrb.Append(30)
 
 	// Close ReaderID 0
-	mrb.CloseReader(0)
+	if err := mrb.ReaderClose(0); err != nil {
+		t.Errorf("Expected nil error from ReaderClose, got %#v", err)
+	}
 
 	// Attempt to iterate over the range with the closed reader
 	var iterations int
@@ -1152,7 +1173,7 @@ func TestMultiReaderBuf_ReaderRange_ClosedReaderID(t *testing.T) {
 	})
 }
 
-func TestMultiReaderBuf_CloseReaderWithHigherRangeFirst(t *testing.T) {
+func TestMultiReaderBuf_ReaderCloseWithHigherRangeFirst(t *testing.T) {
 	t.Parallel()
 
 	mrb := ringbuffer.NewMultiReaderBuf[int](4, 2)
@@ -1174,7 +1195,9 @@ func TestMultiReaderBuf_CloseReaderWithHigherRangeFirst(t *testing.T) {
 	}
 
 	// Close reader 0
-	mrb.CloseReader(0)
+	if err := mrb.ReaderClose(0); err != nil {
+		t.Errorf("Expected nil error from ReaderClose, got %#v", err)
+	}
 
 	// Verify that reader 1 is unaffected
 	var reader1Values []int
@@ -1203,7 +1226,7 @@ func TestMultiReaderBuf_CloseReaderWithHigherRangeFirst(t *testing.T) {
 }
 
 //nolint: funlen // *FIXME*
-func TestMultiReaderBuf_CloseReaderWithLowerRangeFirst(t *testing.T) {
+func TestMultiReaderBuf_ReaderCloseWithLowerRangeFirst(t *testing.T) {
 	t.Parallel()
 
 	mrb := ringbuffer.NewMultiReaderBuf[int](6, 3)
@@ -1235,7 +1258,9 @@ func TestMultiReaderBuf_CloseReaderWithLowerRangeFirst(t *testing.T) {
 	}
 
 	// Close reader 0
-	mrb.CloseReader(0)
+	if err := mrb.ReaderClose(0); err != nil {
+		t.Errorf("Expected nil error from ReaderClose, got %#v", err)
+	}
 
 	// Verify the buffer has discarded elements up to the minimum RangeFirst of the remaining readers
 	if discardedStart := mrb.ReaderRangeFirst(1); discardedStart != rangeFirst1 {
@@ -1290,7 +1315,9 @@ func TestMultiReaderBuf_ReaderToMap_ClosedReader(t *testing.T) {
 	mrb.Append(20)
 
 	// Close ReaderID 0
-	mrb.CloseReader(0)
+	if err := mrb.ReaderClose(0); err != nil {
+		t.Errorf("Expected nil error from ReaderClose, got %#v", err)
+	}
 
 	defer func() {
 		expected := "snapshotting closed reader 0"
@@ -1314,7 +1341,9 @@ func TestMultiReaderBuf_ReaderToSlice_ClosedReader(t *testing.T) {
 	mrb.Append(20)
 
 	// Close ReaderID 0
-	mrb.CloseReader(0)
+	if err := mrb.ReaderClose(0); err != nil {
+		t.Errorf("Expected nil error from ReaderClose, got %#v", err)
+	}
 
 	defer func() {
 		expected := "snapshotting closed reader 0"
@@ -1338,7 +1367,9 @@ func TestMultiReaderBuf_Len_ClosedReader(t *testing.T) {
 	mrb.Append(20)
 
 	// Close ReaderID 0
-	mrb.CloseReader(0)
+	if err := mrb.ReaderClose(0); err != nil {
+		t.Errorf("Expected nil error from ReaderClose, got %#v", err)
+	}
 
 	// Verify that the open reader has the correct length
 	if length := mrb.ReaderLen(1); length != 2 {
@@ -1389,7 +1420,9 @@ func TestMultiReaderBuf_ReaderDiscard_ClosedReader(t *testing.T) {
 	mrb.Append(20)
 
 	// Close ReaderID 0
-	mrb.CloseReader(0)
+	if err := mrb.ReaderClose(0); err != nil {
+		t.Errorf("Expected nil error from ReaderClose, got %#v", err)
+	}
 
 	defer func() {
 		expected := "discarding closed reader 0"

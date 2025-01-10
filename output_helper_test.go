@@ -202,7 +202,7 @@ func TestHelperConsensusWithGenericClosers(t *testing.T) {
 }
 
 // TestEdgeCases checks behavior for out-of-bound indices, repeated closes, etc.
-//nolint: funlen // **README**
+//nolint: funlen,cyclop // **README**
 func TestEdgeCases(t *testing.T) {
 	t.Parallel()
 
@@ -295,13 +295,32 @@ func TestEdgeCases(t *testing.T) {
 		assertProperHelperCleanup(t, helper, 2)
 	})
 
+	// Closing manager 0 with proxy
+	t.Run("ManagerClose does not panic on valid index", func(t *testing.T) {
+		t.Parallel()
+
+		helper := newHelper(t)
+		manager := helper.Manager(0)
+
+		err := manager.Close()
+		if err != nil {
+			t.Errorf("EXPECTED nil error, but got: %#v", err)
+		}
+
+		expectPanic(t, func() {
+			_ = helper.Manager(99)
+		}, "invalid manager index: 99")
+
+		assertProperHelperCleanup(t, helper, 2)
+	})
+
 	// Closing manager 0
 	t.Run("ManagerClose returnes wrapped error", func(t *testing.T) {
 		t.Parallel()
 
 		helper := newHelper(t)
 
-		(*helper.ManagerCloser(0)).ResultErr = errTestCloseError
+		(*helper.ManagerOutput(0)).ResultErr = errTestCloseError
 
 		err := helper.ManagerClose(0) // Should not panic
 		expectedWrappedErr := fmt.Errorf(
@@ -323,16 +342,25 @@ func TestEdgeCases(t *testing.T) {
 		t.Parallel()
 
 		helper := newHelper(t)
+		manager := helper.Manager(0)
 
-		(*helper.ManagerCloser(0)).ResultErr = errTestCloseError
+		if err := (*manager.Output()).ResultErr; err != nil {
+			t.Errorf("Unexpected error %v already set as ResultErr", err)
+		}
+
+		(*helper.ManagerOutput(0)).ResultErr = errTestCloseError
+
+		if err := (*manager.Output()).ResultErr; !errors.Is(err, errTestCloseError) {
+			t.Errorf("Unexpected error %v already set as ResultErr", err)
+		}
 
 		ctx, cancel := context.WithCancel(context.Background())
 
-		if err := helper.ManagerSetContext(0, ctx); err != nil {
+		if err := manager.SetContext(ctx); err != nil {
 			t.Errorf("Unexpected error %v setting manager context", err) // should not be possible to be non-nil.
 		}
 
-		if callCount := (*helper.ManagerCloser(0)).GetCloseCalls(); callCount != 0 {
+		if callCount := (*helper.ManagerOutput(0)).GetCloseCalls(); callCount != 0 {
 			t.Errorf("EXPECTED manager %d's closer to be called 0 time, saw %d times", 0, callCount)
 		}
 
@@ -343,7 +371,15 @@ func TestEdgeCases(t *testing.T) {
 			t.Errorf("EXPECTED manager %d to be %v, saw %v", 0, stream.MOHelperClosed, state)
 		}
 
-		if callCount := (*helper.ManagerCloser(0)).GetCloseCalls(); callCount != 1 {
+		if state := manager.State(); state != stream.MOHelperClosed {
+			t.Errorf("EXPECTED manager %d to be %v, saw %v", 0, stream.MOHelperClosed, state)
+		}
+
+		if outputID := manager.OutputID(); outputID != 0 {
+			t.Errorf("EXPECTED manager outputID %d to be %v, saw %v", 0, 0, outputID)
+		}
+
+		if callCount := (*helper.ManagerOutput(0)).GetCloseCalls(); callCount != 1 {
 			t.Errorf("EXPECTED manager %d's closer to be called 1 time, saw %d times", 0, callCount)
 		}
 
